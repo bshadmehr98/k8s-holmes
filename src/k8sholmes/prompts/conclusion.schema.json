@@ -1,0 +1,32 @@
+{
+  "title": "conclusion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answer", "findings", "limitations", "next_steps", "knowledge_used"],
+  "properties": {
+    "answer": {"type": "string", "description": "The answer to the question in one short paragraph, or the reason it cannot be answered."},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "explanation", "kind", "condition", "resources", "evidence_for", "evidence_against", "uncertainty", "missing_information", "next_steps"],
+        "properties": {
+          "title": {"type": "string"},
+          "explanation": {"type": "string"},
+          "kind": {"type": "string", "enum": ["observation", "hypothesis"]},
+          "condition": {"type": "string", "description": "A stable code such as replicas.single, probe.missing, service.no-backends, limits.missing, exposure.loadbalancer, policy.unselected-pods, alert.missing, change.before-incident, or custom.<slug>."},
+          "resources": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": {"kind": {"type": "string"}, "namespace": {"type": ["string", "null"]}, "name": {"type": "string"}}}},
+          "evidence_for": {"type": "array", "items": {"type": "string"}, "description": "Evidence ids that support the finding."},
+          "evidence_against": {"type": "array", "items": {"type": "string"}, "description": "Evidence ids that contradict it, if any."},
+          "uncertainty": {"type": "string", "description": "What is uncertain, in words; no percentages."},
+          "missing_information": {"type": "array", "items": {"type": "string"}},
+          "next_steps": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}, "description": "What could not be known or read, and why."},
+    "next_steps": {"type": "array", "items": {"type": "string"}},
+    "knowledge_used": {"type": "array", "items": {"type": "string"}, "description": "Ids of knowledge notes or exceptions that shaped the conclusion."}
+  }
+}

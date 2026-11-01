@@ -113,3 +113,37 @@ revised by the owner at any time:
 - **Choice:** `http.probe_url` ships as the one `probe`, disabled until an operator enables it per
   environment, so the probe class and its gate are real and tested.
 - **Status:** awaiting owner review (0001 open question 3).
+
+## D-015: The demo user is an operator, not an administrator  (2026-11-01)
+
+- **Question:** `k8sholmes demo` creates the account `demo` with a fixed password; the first version made it
+  an administrator, a well-known admin login on every installation that ran the demo (review of M1).
+- **Choice:** the demo user is an `operator` on the demo environment only. The first administrator is made
+  through the one-time setup link (design §14.1); the demo never creates one.
+- **Status:** designer's choice from the review.
+
+## D-016: A recording is a snapshot, not request and reply pairs  (2026-11-01)
+
+- **Question:** design §3 of the first record described recordings as every `kubectl` request and reply.
+- **Choice:** a recording folder holds the resources by kind, the events, the logs, the `top` rows, the
+  `can-i` answers, the version and the kinds (`FakeCluster.save`, `Kubectl(record=…)`); `RecordedCluster`
+  answers any query from it with label and field selectors. Simpler to read and to author (the demo is
+  built in code), and a test's query need not match a recorded request byte for byte.
+- **Status:** designer's choice.
+
+## D-017: What the model sees of a large result  (2026-11-01)
+
+- **Question:** a tool result such as the inventory can be hundreds of kilobytes; the model gets a message
+  of bounded size.
+- **Choice:** `thread.shrink` keeps a result's shape and replaces its largest values first (`items` of an
+  inventory go before `relationships` and `counts`), noting what was omitted; the full record is evidence.
+- **Status:** designer's choice.
+
+## D-018: Every failure inside a capability is a recorded call  (2026-11-01)
+
+- **Question:** the capability boundary saw only typed errors; an unexpected exception (a `KeyError` on odd
+  cluster JSON) escaped and left the investigation `running` (review of M1).
+- **Choice:** `Registry.execute` catches every exception from a capability's `run` and records a failed
+  call with the error named; the engine marks an investigation `failed` on any other exception and re-raises
+  it, so no row stays `running` without a process behind it.
+- **Status:** designer's choice from the review.

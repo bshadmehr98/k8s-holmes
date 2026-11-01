@@ -83,26 +83,33 @@ src/k8sholmes/
   records.py            every record of §2 as a pydantic model (extra="forbid"); the JSON of the API and the store
   store.py              persistence (§16): SQLite, one connection per thread, WAL, migrations by version
   auth.py               users, roles, sessions, environment grants, the audit log (§14)
-  environments.py       environments, connection checks, the permission matrix, the inventory and relationships (§4)
-  capabilities/         the capability model, the registry, the built-in capabilities (§5)
-    __init__.py         Capability, Result, the registry, validation, the class gate
-    kubernetes.py       the inspect capabilities over the Cluster port
-    knowledge.py        search of knowledge and exceptions as a capability
+  environments.py       environments, connection checks, the permission matrix, the inventory snapshot (§4)
+  inventory.py          what each kind keeps in the inventory (§4.2)
+  relationships.py      relationships with their basis: defined, observed, inferred (§4.3)
+  cluster.py            the Cluster port, the kind table and the kubectl adapter (read-only verbs; §5.3)
+  capabilities/         the capability model, the registry and the gate (§5)
+    __init__.py         Capability, Context, Inputs, Result handling, the registry, validation, the gate
+    kubernetes.py       the inspect capabilities that read one thing (inventory, get, list, events, logs, health, changes …)
+    reviews.py          the review capabilities (network exposure, service backends, safeguards, alert rules)
+    knowledge.py        knowledge and exceptions in scope, evidence of earlier investigations (§5.3)
     probes.py           the one probe (http.probe_url), off by default
-  cluster.py            the Cluster port and the kubectl adapter (read-only verbs); testing has the recorded one
+    extensions.py       entry points and command capabilities from TOML (§5.5)
+    builtin.py          the registry with every built-in capability and the loaded extensions
   engine.py             the investigation engine (§6): framing, discovery, gathering, concluding, follow-up
-  prompts/              the system prompts and the output schemas the engine sends (plain text files)
-  evidence.py           evidence records, coverage, redaction, retention classes (§7)
-  findings.py           findings, conditions, de-duplication keys, state transitions, revisions (§8)
-  knowledge.py          knowledge notes and exceptions: matching, expiry, revocation, influence (§9)
+  thread.py             what the model sees: the system prompt, the schemas, the context, the thread (§6.2)
+  prompts/              the system prompt and the output schemas the engine sends (plain text files)
+  evidence.py           evidence records, coverage, redaction, size caps (§7)
+  findings.py           validating a conclusion, findings, conditions, states, revisions (§6.3, §8)
+  knowledge.py          knowledge notes and exceptions: matching, expiry, revocation, revisions (§9)
   reports.py            report kinds built from the store; Markdown and JSON export (§10)
   proposals.py          proposals and verifications (§11)
   saved.py              saved investigations, schedules, run comparison, notifications (§12)
-  models.py             the Model port, the OpenAI-compatible client, capability tests, usage (§13)
+  models.py             the Model port, the OpenAI-compatible client, capability tests, usage, the secrets file (§13)
+  app.py                the composition root: the home folder, the store, auth, the registry, the engine, the demo
   server.py  api.py     the web server (standard library), the JSON API and server-sent events (§15)
   page/                 the interface: static HTML, CSS tokens, JavaScript modules, no build step (§15)
-  cli.py                the command line (§15.4)
-  testing/              FakeCluster, RecordedCluster, ScriptedModel, the demo environment, contract checkers
+  cli.py                the command line (§15.5)
+  testing/              FakeCluster, RecordedCluster, ScriptedModel, DemoModel, the demo cluster, contract checkers
 ```
 
 Dependency direction: `page/` and `api.py` call the domain modules; the domain modules call `store.py`,
@@ -593,11 +600,13 @@ chart appears only where the brief's reports need a count over time.
 ### 15.5 The command line
 
 ```text
+k8sholmes [--home DIR] <command>                      # the home: $K8SHOLMES_HOME or ~/.k8sholmes
 k8sholmes serve [--host 127.0.0.1] [--port 8800]       # the web interface; another host needs --allow-remote and TLS in front
 k8sholmes setup                                       # prints the one-time link to create the first admin
-k8sholmes demo [--port 8800]                          # the demo environment and scripted model (§17.2), ready to use
-k8sholmes investigate "QUESTION" --env NAME [--model NAME] [--namespace NS] [--json]
-k8sholmes capabilities [--env NAME]                   # the catalog, with availability in an environment
+k8sholmes demo [--after-fix] [--question "…"]          # the demo environment and its offline investigator (§17.2)
+k8sholmes investigate "QUESTION" --env NAME [--model NAME] [--namespace NS]… [--user NAME] [--json]
+k8sholmes capabilities [--env NAME] [--json]          # the catalog, with availability in an environment
+k8sholmes environments                                # the environments and when they were connected
 k8sholmes export INVESTIGATION_ID --out DIR           # report.md, report.json, evidence/
 ```
 
@@ -721,8 +730,27 @@ is removed.
 
 ## 19. Implemented and planned
 
-Updated as milestones land (the change record lists them). As of 2026-11-01: nothing of this design is
-implemented; the repository holds the design, the process and the package skeleton.
+Updated as milestones land.
+
+**Implemented (milestone 1, 2026-11-01):** the records (§2) and the SQLite store with its versioned
+schema (§16.1); users, roles, sessions and the audit log (§14.1, §14.4); the `Cluster` port with the
+read-only `kubectl` adapter, recordings, `FakeCluster` and the contract checker (§5.3); environments with
+the permission matrix, the inventory and relationships with their basis (§4); the capability model, the
+registry, the code gate and execution into calls and evidence (§5.1, §5.2); the sixteen built-in
+capabilities (§5.3); extensions through entry points and command capabilities (§5.5); evidence with
+coverage, the redactor and size caps (§7, §14.3); knowledge notes and exceptions with exact matching,
+expiry, revocation and revisions (§9); the engine's five phases, validation of the conclusion, budgets,
+cancel, resume, follow-up and interruption marking (§6, §16.2); findings with kinds, states, keys and
+revisions (§8); the `Model` port, the OpenAI-compatible client with tool calls, streaming, structured
+replies, typed failures and the capability tests (§13.1, §13.2, §13.3); the demo environment and its
+offline investigator (§17.2); the command line's `investigate`, `capabilities`, `environments`, `demo`
+and `export` (§15.5, with a plain-text report until §10 lands). Guarantees 1 to 10, 15, 19, 20, 22 and 23
+are tested.
+
+**Planned:** the web interface and `serve`, `setup` (§11, §15, milestone 2); reports, shares, proposals,
+verification, saved and recurring investigations, retention, model comparison (§10, §11, §12, §13.4,
+§16.3, milestone 3); the real-cluster suite, the hosted model test and the user documentation
+(milestone 4).
 
 ## 20. Known limits (0.1)
 

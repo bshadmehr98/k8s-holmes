@@ -1,17 +1,43 @@
-"""k8sholmes: a detective for Kubernetes clusters (design/current.md; design 0001 is proposed).
+"""K8sHolmes: a self-hosted platform for investigating Kubernetes environments (design/current.md).
 
-Nothing is built yet: the first design waits for the owner's acceptance. The public API will be listed
-here with an explicit ``__all__`` as it is built.
+    from k8sholmes import App
+    app = App.open()                                   # ~/.k8sholmes, or $K8SHOLMES_HOME
+    env, user = app.setup_demo()                       # the recorded demo environment, offline investigator
+    inv = app.engine.start(environment=env, question="Why is api restarting?", user=user)
+    inv = app.engine.run(inv.id, user)                 # then store.find(Finding, {"investigation_id": …})
+
+`design/current.md` §19 says what is built.
 """
 
-from k8sholmes.errors import ClusterUnreachable, InvalidCase, K8sHolmesError, ToolMissing
+from k8sholmes.app import App
+from k8sholmes.engine import Engine
+from k8sholmes.errors import (
+    ClusterUnreachable,
+    InvalidInput,
+    InvestigationStateError,
+    K8sHolmesError,
+    ModelFailure,
+    NotFound,
+    PermissionRefused,
+    StoreVersionError,
+    ToolMissing,
+)
+from k8sholmes.store import Store
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "App",
     "ClusterUnreachable",
-    "InvalidCase",
+    "Engine",
+    "InvalidInput",
+    "InvestigationStateError",
     "K8sHolmesError",
+    "ModelFailure",
+    "NotFound",
+    "PermissionRefused",
+    "Store",
+    "StoreVersionError",
     "ToolMissing",
     "__version__",
 ]

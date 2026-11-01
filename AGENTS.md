@@ -18,7 +18,8 @@ check and its §19 says what is built. Why the design looks like this: the owner
 
 **Status:** design 0001 is accepted (2026-11-01, from the owner's brief) and being built in milestones
 M1 to M4 (the table in [design/changes/0001-initial-design.md](design/changes/0001-initial-design.md)).
-Nothing is built yet beyond the package skeleton. Do not implement anything the design does not say;
+Milestone 1 (the engine on records, the capabilities, the models, the demo and the command line) is
+built; `design/current.md` §19 lists what that covers. Do not implement anything the design does not say;
 a gap becomes a `D-` entry or a proposed change record.
 
 ## Commands
@@ -28,29 +29,30 @@ uv sync --all-extras                 # install everything (dev included)
 scripts/check.sh                     # all quality gates: lint, format, types, tests + coverage, build, wheel smoke test
 uv run pytest                        # default suite (fast, offline, deterministic; recordings and fakes)
 uv run pytest -m cluster             # against a throwaway local cluster (kind or minikube); by hand
-uv run k8sholmes demo                # the demo environment and scripted model in the web interface (once built)
-uv run k8sholmes serve               # the web interface at http://127.0.0.1:8800/ (once built)
+uv run k8sholmes demo --question "Why is api restarting?"   # the demo environment and its offline investigator
+uv run k8sholmes investigate "…" --env demo               # an investigation from the command line
+uv run k8sholmes serve               # the web interface at http://127.0.0.1:8800/ (milestone 2)
 ```
 
 ## Layout
 
-The module boundaries of design §3; each module names the sections it implements.
+The module boundaries of design §3; each module's docstring names the sections it implements.
 
 ```
 src/k8sholmes/
   __init__.py  errors.py           the public API with an explicit __all__; K8sHolmesError and its subclasses
   records.py  store.py  auth.py    every record (pydantic); SQLite with a versioned schema; users, roles, sessions, audit
-  environments.py  cluster.py      environments, permissions, inventory and relationships; the Cluster port and the kubectl adapter
-  capabilities/                    the capability model, registry and gate; the built-in Kubernetes, knowledge and probe capabilities
-  engine.py  prompts/              the investigation engine in five phases; the system prompts and output schemas
-  evidence.py  findings.py         evidence with coverage and redaction; findings, conditions, states, revisions
-  knowledge.py                     knowledge notes and exceptions: matching, expiry, revocation, influence
-  reports.py  proposals.py  saved.py   reports from records; proposals and verification; saved and recurring investigations
-  models.py                        the Model port, the OpenAI-compatible client, capability tests, usage
-  server.py  api.py  page/         the standard-library web server, the JSON API and events, the static interface
-  cli.py  testing/                 the command line; FakeCluster, RecordedCluster, ScriptedModel, the demo, contract checkers
+  environments.py  inventory.py  relationships.py   environments, the permission matrix, the inventory snapshot; what each kind keeps; relationships with their basis
+  cluster.py                       the Cluster port, the kind table and the read-only kubectl adapter (recording too)
+  capabilities/                    the model, registry and gate (__init__); kubernetes, reviews, knowledge, probes; extensions; builtin
+  engine.py  prompts/              the investigation engine in five phases; the system prompt and the two output schemas
+  evidence.py  findings.py         evidence with coverage, the redactor, caps; validating a conclusion, findings, states, revisions
+  knowledge.py                     knowledge notes and exceptions: scope, exact matching, expiry, revocation, revisions
+  models.py                        the Model port, the OpenAI-compatible client, the capability tests, usage and secrets
+  app.py  cli.py                   the composition root (home, store, auth, registry, engine, the demo); the command line
+  testing/                         FakeCluster, RecordedCluster, ScriptedModel, the contract checker, the demo cluster and the demo model
+  (planned)                        server.py, api.py, page/ (M2); reports.py, proposals.py, saved.py (M3)
 tests/unit|contract|integration|e2e   default suite; tests/cluster|hosted: by hand, marked
-tests/fixtures/clusters/              recorded clusters the default suite and the demo replay
 design/                why and how: README, current.md, changes/, decisions.md, history/
 docs/  examples/       user docs and runnable examples, both executed by tests once they exist
 ```

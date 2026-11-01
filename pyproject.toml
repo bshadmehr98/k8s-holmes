@@ -71,8 +71,11 @@ ignore = ["PLR0913", "PLR0917", "PLR2004"]
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S108", "S603", "S607", "PT018", "E501", "PLC0415"]
+"tests/**" = ["S101", "S105", "S106", "S108", "S603", "S607", "PT018", "E501", "PLC0415"]
 "examples/**" = ["S101", "S108", "PT018", "T201"]
+"src/k8sholmes/testing/cluster.py" = ["S101"]  # the contract checkers assert by design
+"src/k8sholmes/testing/model.py" = ["S101"]
+"src/k8sholmes/store.py" = ["S608"]  # table and column names come from the TABLES constant, values are bound
 "src/k8sholmes/errors.py" = ["N818"]  # ClusterUnreachable, PermissionRefused … are the public names
 
 [tool.pyright]
