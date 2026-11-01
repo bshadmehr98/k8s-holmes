@@ -11,6 +11,8 @@ design changed is in [`design/changes/`](design/changes/).
 - `k8s.alert_rules` on a cluster without the PrometheusRule CRD states `cannot_answer`, as design §5.1
   says, instead of being refused by the gate: connecting leaves a kind the cluster does not serve out of
   the permission matrix (D-022).
+- The model capability tests give a reasoning model (qwen3, deepseek-r1, gpt-oss) 1024 tokens to answer,
+  so its thinking no longer reads as an empty reply and a false `failed` (D-023; found with qwen3:8b).
 
 ### Removed
 

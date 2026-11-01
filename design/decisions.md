@@ -208,3 +208,13 @@ revised by the owner at any time:
   cluster with PrometheusRule but no ServiceMonitor CRD refused the capability outright. Found by the
   review of milestone 4.
 - **Status:** designer's choice; awaiting owner review.
+
+## D-023: The capability tests leave room for thinking  (2026-11-01)
+
+- **Choice:** the capability tests that read the reply (model, tool calling, streaming, structured) ask
+  for at most 1024 tokens (`models.ANSWER_BUDGET`); connectivity and authentication keep 5 tokens (they
+  only need an answer), limits keeps 16 (it checks the cap).
+- **Why:** reasoning models spend tokens thinking before they write content; with 8 to 64 tokens qwen3:8b
+  on Ollama returned empty content and failed `model`, `tool_calling` and `structured`, though it does all
+  three. The budget is a ceiling: a model that answers at once still uses a few tokens.
+- **Status:** designer's choice from the hosted test; awaiting owner review.

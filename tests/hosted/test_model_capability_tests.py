@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from k8sholmes.models import TESTS, OpenAICompatible, run_capability_tests
+from k8sholmes.models import ANSWER_BUDGET, TESTS, OpenAICompatible, run_capability_tests
 from k8sholmes.records import ModelEndpoint
 
 pytestmark = pytest.mark.hosted
@@ -52,6 +52,8 @@ def test_the_capability_tests_tell_the_truth_about_a_real_endpoint(model: OpenAI
 
 
 def test_one_plain_completion_reports_usage(model: OpenAICompatible) -> None:
-    reply = model.complete([{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=5)
+    reply = model.complete(
+        [{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=ANSWER_BUDGET
+    )
     assert reply.content.strip()
     assert reply.completion_tokens >= 0 and reply.duration_ms >= 0
