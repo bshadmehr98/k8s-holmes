@@ -15,6 +15,7 @@ from tests.helpers import closed_port
 
 SEEN: list[dict[str, Any]] = []
 THINKING_TOKENS = 300  # what the fake reasoning model spends before its answer
+ANSWER_ROOM = THINKING_TOKENS + 64  # thinking plus room for the answer itself
 MODE = {"value": "ok"}
 
 
@@ -43,11 +44,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer sk-test-key":
             self._send(401, b'{"error": "unauthorized"}')
             return
-        if not self._failure_or_thinking(body):
-            self._answer(body)
+        if self._failure(body):
+            return
+        if MODE["value"] == "thinking" and body.get("max_tokens", 0) < ANSWER_ROOM:
+            self._ran_out_thinking(body)
+            return
+        self._answer(body)
 
-    def _failure_or_thinking(self, body: dict[str, Any]) -> bool:
-        """The failure modes, and a reasoning model whose budget runs out while it thinks."""
+    def _failure(self, body: dict[str, Any]) -> bool:
+        """The failure modes: an error answered, so nothing else is sent."""
         failures = {
             "overloaded": (503, b'{"error": "overloaded"}'),
             "bad": (400, b'{"error": "bad request"}'),
@@ -59,17 +64,18 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("response_format") and MODE["value"] == "no_structured":
             self._send(400, b'{"error": "response_format is not supported"}')
             return True
-        if MODE["value"] != "thinking" or body.get("max_tokens", 0) >= THINKING_TOKENS + 64:
-            return False
+        return False
+
+    def _ran_out_thinking(self, body: dict[str, Any]) -> None:
+        """A reasoning model whose budget runs out while it thinks: no content, finish_reason length."""
         usage = {"prompt_tokens": 10, "completion_tokens": body["max_tokens"]}
         if body.get("stream"):
             chunk = json.dumps({"choices": [], "usage": usage})
             self._send(200, f"data: {chunk}\n\ndata: [DONE]\n\n".encode(), "text/event-stream")
-            return True
+            return
         message = {"role": "assistant", "content": "", "reasoning": "Okay, the user wants..."}
         response = {"choices": [{"message": message, "finish_reason": "length"}], "usage": usage}
         self._send(200, json.dumps(response).encode())
-        return True
 
     def _answer(self, body: dict[str, Any]) -> None:
         if body.get("stream"):

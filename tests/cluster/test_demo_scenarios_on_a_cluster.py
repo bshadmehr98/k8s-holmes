@@ -17,7 +17,7 @@ import pytest
 from k8sholmes.app import App
 from k8sholmes.capabilities import Context
 from k8sholmes.records import Environment, Evidence, Finding, Investigation, ResourceRef, Scope, User
-from tests.cluster.conftest import _kubectl, has_crd
+from tests.cluster.conftest import has_crd, kubectl
 
 pytestmark = [pytest.mark.cluster, pytest.mark.timeout(900)]
 
@@ -130,7 +130,7 @@ def test_a_secret_is_read_by_name_only(world, shop: str) -> None:
     planted value nor its base64 form (how the API returns it) reaches evidence."""
     _, env, _ = world
     planted = "tok_live_PLANTEDsecretvalue"
-    _kubectl(
+    kubectl(
         "create",
         "secret",
         "generic",

@@ -24,7 +24,7 @@ LOCAL_CONTEXT_PREFIXES = ("kind-", "minikube")
 SHOP = "shop"
 
 
-def _kubectl(
+def kubectl(
     *args: str, context: str, check: bool = True, timeout: float = 60
 ) -> subprocess.CompletedProcess[str]:
     command = ["kubectl", "--context", context, "--request-timeout", "30s", *args]
@@ -51,14 +51,19 @@ def context() -> str:
         pytest.skip(
             f"context {name!r} does not look like a throwaway cluster (kind-* or minikube); set K8SHOLMES_TEST_ALLOW_CONTEXT=1 to use it anyway"
         )
-    probe = _kubectl("version", "-o", "json", context=name, check=False, timeout=30)
+    probe = kubectl("version", "-o", "json", context=name, check=False, timeout=30)
     if probe.returncode != 0:
         pytest.skip(f"the cluster behind context {name!r} does not answer: {probe.stderr.strip()[:200]}")
     return name
 
 
+def apply(context: str, relative: str) -> None:
+    """Apply one manifest file of `tests/cluster/manifests/` into the namespace `shop`."""
+    kubectl("apply", "-n", SHOP, "-f", str(MANIFESTS / relative), context=context)
+
+
 def has_crd(context: str, name: str) -> bool:
-    return _kubectl("get", "crd", name, context=context, check=False, timeout=30).returncode == 0
+    return kubectl("get", "crd", name, context=context, check=False, timeout=30).returncode == 0
 
 
 def wait_for(predicate: Callable[[], bool], *, timeout_s: float, every_s: float = 2.0, what: str) -> None:
@@ -71,7 +76,7 @@ def wait_for(predicate: Callable[[], bool], *, timeout_s: float, every_s: float 
 
 
 def pods(context: str, namespace: str, selector: str) -> list[dict]:
-    out = _kubectl("get", "pods", "-n", namespace, "-l", selector, "-o", "json", context=context)
+    out = kubectl("get", "pods", "-n", namespace, "-l", selector, "-o", "json", context=context)
     return json.loads(out.stdout)["items"]
 
 
@@ -88,23 +93,20 @@ def shop(context: str) -> Iterator[str]:
     """The demo shop in the namespace `shop`: the first api revision, then the lower limit, then the alert
     rules when the CRD exists; waits until api has been OOM-killed. Skips when `shop` already exists, so
     nothing of the cluster's own is touched; deletes the namespace afterwards, even when a test fails."""
-    if _kubectl("get", "namespace", SHOP, context=context, check=False, timeout=30).returncode == 0:
+    if kubectl("get", "namespace", SHOP, context=context, check=False, timeout=30).returncode == 0:
         pytest.skip(f"the namespace {SHOP!r} exists on context {context!r}; the suite needs to create it")
-    _kubectl("create", "namespace", SHOP, context=context)
+    kubectl("create", "namespace", SHOP, context=context)
     try:
-
-        def apply(relative: str) -> None:
-            _kubectl("apply", "-n", SHOP, "-f", str(MANIFESTS / relative), context=context)
-
-        apply("shop/00-workloads.yaml")
+        apply(context, "shop/00-workloads.yaml")
         wait_for(lambda: bool(pods(context, SHOP, "app=api")), timeout_s=120, what="api pods appearing")
-        apply("shop/10-api-lower-limit.yaml")
+        apply(context, "shop/10-api-lower-limit.yaml")
         if has_crd(context, "prometheusrules.monitoring.coreos.com"):
-            apply("shop/20-alert-rules.yaml")
+            apply(context, "shop/20-alert-rules.yaml")
         wait_for(lambda: oom_killed(context, SHOP), timeout_s=300, every_s=5, what="api being OOM-killed")
         yield SHOP
     finally:
-        _kubectl("delete", "namespace", SHOP, "--wait=false", context=context, check=False)
+        # wait for the deletion, so a second run right after does not find `shop` still terminating
+        kubectl("delete", "namespace", SHOP, "--timeout=300s", context=context, check=False, timeout=330)
 
 
 @pytest.fixture

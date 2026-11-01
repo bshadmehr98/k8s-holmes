@@ -203,6 +203,7 @@ revised by the owner at any time:
 - **Choice:** connecting leaves out of the permission matrix every checked kind the cluster does not serve
   (a CRD that is not installed, such as `prometheusrules` or `servicemonitors`), instead of recording it
   as `false`. The gate refuses only on `false`, so the capability runs and states `cannot_answer` itself.
+  `k8s.permissions` still reports the absence, as `not_served` (checked on connect, not in the matrix).
 - **Why:** §5.1 says `k8s.alert_rules` is `cannot_answer` when the CRDs are absent, and the reliability
   review counts on that coverage; recording the absence as a refusal made that branch unreachable, and a
   cluster with PrometheusRule but no ServiceMonitor CRD refused the capability outright. Found by the

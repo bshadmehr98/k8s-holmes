@@ -221,6 +221,10 @@ def test_alert_rules_on_a_cluster_without_the_crd_is_cannot_answer_not_refused(t
     assert call.status == "completed", call.reason
     assert evidence is not None and evidence.coverage == "cannot_answer"
     assert "PrometheusRule CRD is not installed" in evidence.coverage_reason
+    _, perms = builtin_registry(extensions=False).execute("k8s.permissions", {}, ctx, auth)
+    assert perms is not None  # the absence is still evidence: checked, and not served here
+    assert {"list prometheusrules", "list servicemonitors"} <= set(perms.data["not_served"])
+    assert "not served: " in perms.summary and "list prometheusrules" not in perms.data["denied"]
 
 
 def test_permissions_top_knowledge_and_recall(world) -> None:
