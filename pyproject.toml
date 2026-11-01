@@ -36,10 +36,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bshadmehr98/k8sholmes"
-Repository = "https://github.com/bshadmehr98/k8sholmes"
-Issues = "https://github.com/bshadmehr98/k8sholmes/issues"
-Changelog = "https://github.com/bshadmehr98/k8sholmes/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/bshadmehr98/k8s-holmes"
+Repository = "https://github.com/bshadmehr98/k8s-holmes"
+Issues = "https://github.com/bshadmehr98/k8s-holmes/issues"
+Changelog = "https://github.com/bshadmehr98/k8s-holmes/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling>=1.25"]
