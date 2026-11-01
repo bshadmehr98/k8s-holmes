@@ -419,3 +419,130 @@ class ModelCall(Record):
     duration_ms: int = 0
     status: Literal["ok", "retried", "failed"] = "ok"
     error: str | None = None
+
+
+# Reports (design §10)
+
+
+ReportKind = Literal["live", "investigation", "incident_review", "reliability_review", "comparison"]
+
+
+class ReportEdit(Record):
+    """A person's addition or correction on a report revision, kept apart from the generated text."""
+
+    at: datetime = Field(default_factory=now)
+    author: str
+    section: str  # the section the edit belongs to
+    text: str
+
+
+class Report(Record):
+    id: str = Field(default_factory=lambda: new_id("rep"))
+    environment_id: str
+    kind: ReportKind
+    title: str
+    subject_id: str  # the investigation, the saved investigation or the scope the report is about
+    revision: int = 1
+    generated_at: datetime = Field(default_factory=now)
+    generated_by: str  # "user:<id>" who asked for it
+    sections: list[
+        dict[str, Any]
+    ] = []  # [{"heading", "kind": text|table|list|findings, "body", "counted": {name: n}}]
+    numbers: dict[str, int] = {}  # every number the report quotes, with the records it counted
+    edits: list[ReportEdit] = []
+
+
+class Share(Record):
+    id: str = Field(default_factory=lambda: new_id("shr"))
+    report_id: str
+    environment_id: str
+    token_hash: str
+    created_by: str
+    created_at: datetime = Field(default_factory=now)
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
+# Proposals and verification (design §11)
+
+
+ProposalKind = Literal["config_change", "monitoring", "task"]
+ProposalState = Literal["proposed", "approved", "applied", "verified", "rejected"]
+
+
+class Verification(Record):
+    at: datetime = Field(default_factory=now)
+    by: str
+    outcome: Literal["verified", "not_verified"]
+    condition: str
+    before_evidence: list[str] = []
+    after_evidence: list[str] = []
+    detail: str = ""
+
+
+class Proposal(Record):
+    id: str = Field(default_factory=lambda: new_id("prp"))
+    environment_id: str
+    investigation_id: str
+    finding_ids: list[str] = []
+    kind: ProposalKind
+    title: str
+    change: str  # the manifest diff, the command, the rule to add, or the task
+    intended_effect: str
+    verification_capabilities: list[dict[str, Any]] = []  # [{"id", "inputs"}] rerun to verify
+    verification_condition: str  # the condition that must be observed_absent afterwards
+    wait_ms: int = 0
+    state: ProposalState = "proposed"
+    author: str
+    created_at: datetime = Field(default_factory=now)
+    applied_note: str = ""
+    verifications: list[Verification] = []
+    revisions: list[Revision] = []
+
+
+# Saved and recurring investigations (design §12)
+
+
+Frequency = Literal["every_run", "changes_only", "daily_digest"]
+
+
+class Schedule(Record):
+    every_hours: float | None = None  # an interval…
+    daily_at: str | None = None  # …or a time of day "HH:MM" UTC
+    enabled: bool = True
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
+
+
+class Notification(Record):
+    webhook_url_env: str | None = None  # the environment variable that holds the webhook URL (never stored)
+    frequency: Frequency = "changes_only"
+    last_sent_at: datetime | None = None
+
+
+class SavedInvestigation(Record):
+    id: str = Field(default_factory=lambda: new_id("sav"))
+    environment_id: str
+    question: str
+    scope: Scope = Field(default_factory=Scope)
+    period_rule: str = "the last 24 hours"
+    model_endpoint_id: str | None = None
+    budgets: Budgets = Field(default_factory=Budgets)
+    schedule: Schedule = Field(default_factory=Schedule)
+    notification: Notification = Field(default_factory=Notification)
+    created_by: str
+    created_at: datetime = Field(default_factory=now)
+    runs: list[str] = []  # investigation ids, oldest first
+
+
+class Comparison(Record):
+    """Two runs of one saved investigation, by finding key (design §8.3, §10)."""
+
+    saved_id: str
+    before_id: str | None
+    after_id: str
+    new: list[str] = []  # finding ids of the after run
+    resolved: list[str] = []  # finding ids of the before run
+    unchanged: int = 0
+    evidence_changed: list[str] = []  # finding ids whose evidence differs
+    summary: str = ""
