@@ -3,24 +3,16 @@ by K8sHolmes; a verification reruns the capabilities and compares before and aft
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any, cast
 
+from k8sholmes import findings as findings_mod
 from k8sholmes.auth import Auth
 from k8sholmes.capabilities import Context, Registry
-from k8sholmes.cluster import Cluster
 from k8sholmes.errors import InvalidInput, InvestigationStateError
-from k8sholmes.records import (
-    Environment,
-    Evidence,
-    Finding,
-    Proposal,
-    ProposalState,
-    Revision,
-    User,
-    Verification,
-    now,
-)
+from k8sholmes.records import Evidence, Finding, Proposal, ProposalState, Revision, Verification, now
 from k8sholmes.store import Store
 
 TRANSITIONS: dict[ProposalState, set[ProposalState]] = {
@@ -32,7 +24,8 @@ TRANSITIONS: dict[ProposalState, set[ProposalState]] = {
 }
 
 # Whether a condition still shows in a capability's result: the code checks of a verification (§11.2).
-# Each takes the result's data and the resource names the proposal's findings name.
+# Each takes the result's data and the resource names the proposal's findings name; None means the result
+# says nothing about the condition, and nothing is ever called absent on it.
 Detector = Callable[[Any, set[str]], bool | None]
 
 
@@ -40,6 +33,8 @@ def _oom(data: Any, names: set[str]) -> bool | None:
     if not isinstance(data, dict) or "pods" not in data:
         return None
     pods = cast(list[dict[str, Any]], cast(dict[str, Any], data).get("pods") or [])
+    if not pods:
+        return None  # no pods were observed: nothing can be called absent
     states = [
         s
         for p in pods
@@ -79,11 +74,8 @@ def _no_backends(data: Any, names: set[str]) -> bool | None:
 def _alert_missing(data: Any, names: set[str]) -> bool | None:
     if not isinstance(data, dict) or "workloads_without_alerts" not in data:
         return None
-    without = {
-        str(w).split("/")[-1]
-        for w in cast(list[str], cast(dict[str, Any], data).get("workloads_without_alerts") or [])
-    }
-    return bool(without & names)
+    without = cast(list[str], cast(dict[str, Any], data).get("workloads_without_alerts") or [])
+    return bool({str(w).split("/")[-1] for w in without} & names)
 
 
 DETECTORS: dict[str, Detector] = {
@@ -113,18 +105,36 @@ def set_state(store: Store, proposal: Proposal, state: ProposalState, *, by: str
         raise InvestigationStateError(f"a proposal cannot go from {proposal.state} to {state}")
     if state == "verified":
         raise InvestigationStateError("verified is set by a verification, not by hand")
-    revision = Revision(
-        at=now(),
-        author=by,
-        change=f"state {proposal.state} -> {state}" + (f": {note}" if note else ""),
-        before={"state": proposal.state},
-    )
+    change = f"state {proposal.state} -> {state}" + (f": {note}" if note else "")
+    revision = Revision(at=now(), author=by, change=change, before={"state": proposal.state})
     updates: dict[str, Any] = {"state": state, "revisions": [*proposal.revisions, revision]}
     if state == "applied":
         updates["applied_note"] = note
     updated = proposal.model_copy(update=updates)
     store.put(updated)
     return updated
+
+
+def applied_at(proposal: Proposal) -> Any:
+    """When the proposal was last marked applied, from its revisions."""
+    marks = [r.at for r in proposal.revisions if r.change.startswith("state approved -> applied")]
+    return marks[-1] if marks else None
+
+
+def _rerun(registry: Registry, auth: Auth, ctx: Context, proposal: Proposal) -> list[Evidence]:
+    """The proposal's capabilities again, each call committed as it completes (never under one lock)."""
+    after: list[Evidence] = []
+    for spec in proposal.verification_capabilities:
+        call, evidence = registry.execute(
+            str(spec.get("id", "")), cast(dict[str, Any], spec.get("inputs") or {}), ctx, auth
+        )
+        with ctx.store.transaction():
+            ctx.store.put(call)
+            if evidence is not None:
+                ctx.store.put(evidence)
+        if evidence is not None:
+            after.append(evidence)
+    return after
 
 
 def _judge(condition: str, after: list[Evidence], names: set[str]) -> tuple[str, str]:
@@ -136,7 +146,7 @@ def _judge(condition: str, after: list[Evidence], names: set[str]) -> tuple[str,
         )
     if not after:
         return "not_verified", "no capability ran; nothing to compare"
-    seen = [detector(e.data, names) for e in after if e.error is None]
+    seen = [detector(e.data, names) for e in after if e.error is None and e.coverage == "observed"]
     if all(s is None for s in seen):
         return "not_verified", "the capabilities that ran say nothing about the condition"
     if any(seen):
@@ -145,82 +155,46 @@ def _judge(condition: str, after: list[Evidence], names: set[str]) -> tuple[str,
 
 
 def verify(
-    store: Store,
-    registry: Registry,
-    auth: Auth,
-    *,
-    proposal: Proposal,
-    environment: Environment,
-    cluster: Cluster,
-    user: User,
+    registry: Registry, auth: Auth, ctx: Context, proposal: Proposal
 ) -> tuple[Proposal, list[Evidence]]:
     """Rerun the proposal's capabilities, compare with the findings' evidence, record the outcome (§11.2).
 
     `verified` only when the condition is observed absent after the change; otherwise `not_verified` with
     what still shows. Unknown conditions are never verified by code: the detail says to compare by hand.
     """
+    store, by = ctx.store, f"user:{ctx.user.id}"
     if proposal.state != "applied":
         raise InvestigationStateError(
             f"a proposal is verified after it was applied; this one is {proposal.state}"
         )
+    marked = applied_at(proposal)
+    if marked is not None and proposal.wait_ms and now() < marked + timedelta(milliseconds=proposal.wait_ms):
+        ready = (marked + timedelta(milliseconds=proposal.wait_ms)).isoformat(timespec="seconds")
+        raise InvestigationStateError(
+            f"the proposal asks to wait {proposal.wait_ms} ms after it was applied; verify from {ready}"
+        )
     findings = store.get_many(Finding, proposal.finding_ids)
     names = {r.name for f in findings for r in f.resources}
-    before = sorted({e for f in findings for e in f.evidence_for})
-    ctx = Context(
-        environment=environment,
-        cluster=cluster,
-        store=store,
-        user=user,
-        investigation_id=proposal.investigation_id,
-    )
-    after: list[Evidence] = []
-    with store.transaction():
-        for spec in proposal.verification_capabilities:
-            call, evidence = registry.execute(
-                str(spec.get("id", "")), cast(dict[str, Any], spec.get("inputs") or {}), ctx, auth
-            )
-            store.put(call)
-            if evidence is not None:
-                store.put(evidence)
-                after.append(evidence)
+    ctx = dataclasses.replace(ctx, investigation_id=proposal.investigation_id)
+    after = _rerun(registry, auth, ctx, proposal)
     outcome, detail = _judge(proposal.verification_condition, after, names)
     verification = Verification(
-        by=f"user:{user.id}",
+        by=by,
         outcome=cast(Any, outcome),
         condition=proposal.verification_condition,
-        before_evidence=before,
+        before_evidence=sorted({e for f in findings for e in f.evidence_for}),
         after_evidence=[e.id for e in after],
         detail=detail,
     )
     updates: dict[str, Any] = {"verifications": [*proposal.verifications, verification]}
     if outcome == "verified":
-        updates["state"] = "verified"
-        updates["revisions"] = [
-            *proposal.revisions,
-            Revision(at=now(), author=f"user:{user.id}", change="verified", before={"state": proposal.state}),
-        ]
+        revision = Revision(at=now(), author=by, change="verified", before={"state": proposal.state})
+        updates.update(state="verified", revisions=[*proposal.revisions, revision])
         for f in findings:
-            if f.state in ("fixed", "open", "acknowledged"):
-                store.put(
-                    f.model_copy(
-                        update={
-                            "state": "verified",
-                            "updated_at": now(),
-                            "revisions": [
-                                *f.revisions,
-                                Revision(
-                                    at=now(),
-                                    author=f"user:{user.id}",
-                                    change=f"verified by proposal {proposal.id}",
-                                    before={"state": f.state},
-                                ),
-                            ],
-                        }
-                    )
-                )
+            findings_mod.mark_verified(store, f, author=by, note=f"by proposal {proposal.id}")
     updated = proposal.model_copy(update=updates)
     store.put(updated)
     return updated, after
 
 
-__all__ = ["DETECTORS", "TRANSITIONS", "create_proposal", "set_state", "verify"]
+__all__ = ["DETECTORS", "TRANSITIONS", "applied_at", "create_proposal", "set_state", "verify"]

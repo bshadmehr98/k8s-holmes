@@ -414,7 +414,16 @@ class Engine:
             *thread.messages_for(self.store, inv, environment, available, unavailable),
             {"role": "user", "content": thread.CONCLUDE_INSTRUCTION},
         ]
-        reply, _ = self._call_model(inv, model, "comparison", messages, schema=thread.CONCLUSION_SCHEMA)
+        started = self.clock()
+        try:  # one call, no retries, and the investigation's own usage and model name stay untouched
+            reply = model.complete(messages, schema=thread.CONCLUSION_SCHEMA)
+        except ModelFailure as exc:
+            duration_ms = int((self.clock() - started) * 1000)
+            self._record_model_call(
+                inv, model, "comparison", duration_ms=duration_ms, status="failed", error=str(exc)
+            )
+            raise
+        self._record_model_call(inv, model, "comparison", duration_ms=reply.duration_ms, reply=reply)
         validated = findings_mod.validate_conclusion(
             thread.json_object(reply.content), evidence, knowledge_ids
         )

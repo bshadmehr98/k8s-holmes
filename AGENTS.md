@@ -54,7 +54,7 @@ src/k8sholmes/
   server.py  runner.py             the standard-library web server and static page with the event stream; background runs and their events
   api/                             the JSON API: dispatch and the checks (__init__), account, environments (and capabilities), investigations (and evidence, findings), knowledge, reports (and shares, the model comparison), proposals, saved, settings
   reports/                         reports built from records (base: sections, revisions, edits, Markdown, shares; investigation: the live summary and the report; reviews: incident and reliability)
-  proposals.py  saved.py  retention.py   proposals and verification by code; saved investigations, comparison by key, notifications, the scheduler; the retention purge
+  proposals.py  saved.py  scheduler.py  retention.py   proposals and verification by code; saved investigations, comparison by key, notifications; the server's scheduler thread; the retention purge
   page/                            the interface: index.html, tokens.css, app.css, app.js and views/*.js; no build step
   testing/                         FakeCluster, RecordedCluster, ScriptedModel, the contract checker, the demo cluster and the demo model
 tests/unit|contract|integration|e2e   default suite; tests/cluster|hosted: by hand, marked

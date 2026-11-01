@@ -8,7 +8,9 @@ findings, revisions and a person's edits stay apart; Markdown and JSON exports; 
 from k8sholmes.reports.base import (
     Section,
     add_edit,
+    cited_evidence,
     create_share,
+    revisions,
     revoke_share,
     section,
     shared_report,
@@ -26,6 +28,7 @@ from k8sholmes.reports.reviews import incident_review, reliability_review
 __all__ = [
     "Section",
     "add_edit",
+    "cited_evidence",
     "create_share",
     "incident_review",
     "investigation_json",
@@ -33,6 +36,7 @@ __all__ = [
     "live_summary",
     "reliability_review",
     "report_text",
+    "revisions",
     "revoke_share",
     "section",
     "shared_report",

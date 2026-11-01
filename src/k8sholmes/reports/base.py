@@ -9,21 +9,16 @@ from datetime import timedelta
 from typing import Any, cast
 
 from k8sholmes.errors import InvalidInput, NotFound
-from k8sholmes.records import (
-    Call,
-    Evidence,
-    Finding,
-    Investigation,
-    Report,
-    ReportEdit,
-    ReportKind,
-    Share,
-    Step,
-    now,
-)
+from k8sholmes.records import Call, Evidence, Finding, Investigation, Report, ReportEdit, Share, Step, now
 from k8sholmes.store import Store
 
 Section = dict[str, Any]
+
+
+def section(heading: str, kind: str, body: Any, counted: dict[str, int] | None = None) -> Section:
+    """One section: `kind` is text (a mapping), list, findings or table; `counted` names the records behind
+    the numbers the body shows."""
+    return {"heading": heading, "kind": kind, "body": body, "counted": counted or {}}
 
 
 def mapping(value: Any) -> dict[str, Any]:
@@ -31,37 +26,34 @@ def mapping(value: Any) -> dict[str, Any]:
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
-def section(heading: str, kind: str, body: Any, counted: dict[str, int] | None = None) -> Section:
-    return {"heading": heading, "kind": kind, "body": body, "counted": counted or {}}
+# rows shared by the report kinds
 
 
 def finding_rows(findings: list[Finding], evidence: dict[str, Evidence]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for f in findings:
-        rows.append(
-            {
-                "id": f.id,
-                "title": f.title,
-                "explanation": f.explanation,
-                "kind": f.kind,
-                "state": f.state,
-                "condition": f.condition,
-                "resources": [r.model_dump() for r in f.resources],
-                "author": f.author,
-                "uncertainty": f.uncertainty,
-                "missing_information": f.missing_information,
-                "next_steps": f.next_steps,
-                "exception_id": f.exception_id,
-                "exception_note": f.exception_note,
-                "knowledge_used": f.knowledge_used,
-                "evidence_for": [_evidence_ref(evidence.get(e), e) for e in f.evidence_for],
-                "evidence_against": [_evidence_ref(evidence.get(e), e) for e in f.evidence_against],
-            }
-        )
-    return rows
+    return [
+        {
+            "id": f.id,
+            "title": f.title,
+            "explanation": f.explanation,
+            "kind": f.kind,
+            "state": f.state,
+            "condition": f.condition,
+            "resources": [r.model_dump() for r in f.resources],
+            "author": f.author,
+            "uncertainty": f.uncertainty,
+            "missing_information": f.missing_information,
+            "next_steps": f.next_steps,
+            "exception_id": f.exception_id,
+            "exception_note": f.exception_note,
+            "knowledge_used": f.knowledge_used,
+            "evidence_for": [evidence_ref(evidence.get(e), e) for e in f.evidence_for],
+            "evidence_against": [evidence_ref(evidence.get(e), e) for e in f.evidence_against],
+        }
+        for f in findings
+    ]
 
 
-def _evidence_ref(ev: Evidence | None, ev_id: str) -> dict[str, Any]:
+def evidence_ref(ev: Evidence | None, ev_id: str) -> dict[str, Any]:
     if ev is None:
         return {"id": ev_id, "missing": True}
     return {
@@ -74,6 +66,33 @@ def _evidence_ref(ev: Evidence | None, ev_id: str) -> dict[str, Any]:
     }
 
 
+def evidence_rows(evidence: dict[str, Evidence]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": e.id,
+            "source": e.source,
+            "coverage": e.coverage,
+            "collected_at": e.collected_at.isoformat(),
+            "summary": e.summary,
+            "redactions": e.redactions,
+        }
+        for e in evidence.values()
+    ]
+
+
+def call_rows(calls: list[Call]) -> list[dict[str, Any]]:
+    return [
+        {
+            "capability": c.capability_id,
+            "status": c.status,
+            "reason": c.reason,
+            "duration_ms": c.duration_ms,
+            "at": c.at.isoformat(),
+        }
+        for c in calls
+    ]
+
+
 def gather(
     store: Store, inv: Investigation
 ) -> tuple[list[Finding], dict[str, Evidence], list[Call], list[Step]]:
@@ -84,35 +103,37 @@ def gather(
     return findings, evidence, calls, steps
 
 
-def store_report(
-    store: Store,
-    *,
-    kind: ReportKind,
-    environment_id: str,
-    subject_id: str,
-    title: str,
-    sections: list[Section],
-    numbers: dict[str, int],
-    by: str,
-) -> Report:
-    earlier = [
-        r
-        for r in store.find(Report, {"kind": kind, "subject_id": subject_id})
-        if r.environment_id == environment_id
-    ]
-    revision = max((r.revision for r in earlier), default=0) + 1
-    report = Report(
-        environment_id=environment_id,
-        kind=kind,
-        title=title,
-        subject_id=subject_id,
-        revision=revision,
-        generated_by=by,
-        sections=sections,
-        numbers=numbers,
-    )
-    store.put(report)
-    return report
+def cited_evidence(report: Report) -> set[str]:
+    """Every evidence id a report embeds: the retention purge keeps them (design §16.3)."""
+    ids: set[str] = set()
+    for sec in report.sections:
+        body = sec["body"]
+        if sec["kind"] == "findings":
+            for f in cast(list[dict[str, Any]], body):
+                for key in ("evidence_for", "evidence_against"):
+                    ids.update(str(e["id"]) for e in cast(list[dict[str, Any]], f[key]))
+        elif sec["kind"] == "text":
+            ids.update(str(v) for k, v in mapping(body).items() if k.endswith("_evidence") and v)
+        elif sec["kind"] == "table":
+            ids.update(str(r["evidence"]) for r in cast(list[dict[str, Any]], body) if r.get("evidence"))
+    return ids
+
+
+# revisions, edits, rendering
+
+
+def revisions(store: Store, report: Report) -> list[Report]:
+    """Every revision of one report (same kind, subject and environment), oldest first."""
+    found = store.find(Report, {"kind": report.kind, "subject_id": report.subject_id}, order_by="revision")
+    return [r for r in found if r.environment_id == report.environment_id]
+
+
+def store_report(store: Store, report: Report) -> Report:
+    """Store a generated report as the next revision of its kind and subject."""
+    earlier = revisions(store, report)
+    stored = report.model_copy(update={"revision": max((r.revision for r in earlier), default=0) + 1})
+    store.put(stored)
+    return stored
 
 
 def add_edit(store: Store, report: Report, *, author: str, section: str, text: str) -> Report:
@@ -121,9 +142,8 @@ def add_edit(store: Store, report: Report, *, author: str, section: str, text: s
         raise InvalidInput("an edit needs text")
     if section not in {s["heading"] for s in report.sections}:
         raise InvalidInput(f"the report has no section {section!r}")
-    edited = report.model_copy(
-        update={"edits": [*report.edits, ReportEdit(author=author, section=section, text=text.strip())]}
-    )
+    edit = ReportEdit(author=author, section=section, text=text.strip())
+    edited = report.model_copy(update={"edits": [*report.edits, edit]})
     store.put(edited)
     return edited
 
@@ -179,6 +199,9 @@ def _markdown_findings(rows: list[dict[str, Any]]) -> list[str]:
                 f"  Evidence: {e['id']} ({e.get('source')}, {e.get('coverage')}, {e.get('collected_at')})"
             )
     return lines or ["(none)"]
+
+
+# shares
 
 
 def create_share(store: Store, report: Report, *, by: str, days: int = 7) -> tuple[Share, str]:

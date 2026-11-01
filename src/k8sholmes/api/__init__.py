@@ -95,11 +95,14 @@ Handler = Callable[["Api", Request, dict[str, str]], Response]
 ROUTES: list[tuple[str, re.Pattern[str], str, Handler]] = []
 
 
-def route(method: str, pattern: str) -> Callable[[Handler], Handler]:
-    """Register a route; patterns are anchored regular expressions with named groups."""
+def route(method: str, pattern: str, *, public: bool = False) -> Callable[[Handler], Handler]:
+    """Register a route; patterns are anchored regular expressions with named groups. A public route
+    answers without a session (the setup, sign-in and share routes)."""
 
     def register(fn: Handler) -> Handler:
         ROUTES.append((method, re.compile("^" + pattern + "$"), pattern, fn))
+        if public:
+            PUBLIC_ROUTES.add((method, pattern))
         return fn
 
     return register

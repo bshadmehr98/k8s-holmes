@@ -1,6 +1,6 @@
-import { api, el, emptyState, environmentPicker, currentEnv, hasRole, form, toast, when, kv } from "./common.js";
+import { api, el, emptyState, environmentPicker, currentEnv, hasRole, form, toast, when, kv, state } from "./common.js";
 
-const KIND_LABEL = { investigation: "investigation report", incident_review: "incident review", reliability_review: "reliability and monitoring review", comparison: "comparison", live: "live summary" };
+const KIND_LABEL = { investigation: "investigation report", incident_review: "incident review", reliability_review: "reliability and monitoring review", comparison: "comparison" };
 
 export async function renderReports(main, id) {
   if (id) return renderReport(main, id);
@@ -35,18 +35,19 @@ async function renderReport(main, id) {
   async function reload() { data = await api("GET", `/api/reports/${id}`); draw(); }
 
   function shares() {
+    const admin = () => Boolean(state.me && state.me.is_admin);
     const active = data.shares.filter((s) => !s.revoked_at);
     const rows = data.shares.length ? el("div", { class: "list" }, data.shares.map((s) => el("div", { class: "list-item" },
       el("div", { class: "small" }, el("span", { class: `badge ${s.revoked_at ? "" : new Date(s.expires_at) < Date.now() ? "review" : "ok"}` }, s.revoked_at ? "revoked" : new Date(s.expires_at) < Date.now() ? "expired" : "active"), ` created ${when(s.created_at)} by ${s.created_by} · expires ${s.expires_at.slice(0, 10)}`),
-      can() && !s.revoked_at ? el("button", { class: "btn sm danger", onclick: async () => { try { await api("POST", `/api/shares/${s.id}/revoke`); await reload(); } catch (err) { toast(err.message, "error"); } } }, "Revoke") : null,
+      admin() && !s.revoked_at ? el("button", { class: "btn sm danger", onclick: async () => { try { await api("POST", `/api/shares/${s.id}/revoke`); await reload(); } catch (err) { toast(err.message, "error"); } } }, "Revoke") : null,
     ))) : el("div", { class: "muted small" }, "No share links.");
-    const make = can() ? form([{ name: "days", label: "Days until the link expires", type: "number", value: 7 }], async (d) => {
+    const make = admin() ? form([{ name: "days", label: "Days until the link expires", type: "number", value: 7 }], async (d) => {
       const made = await api("POST", `/api/reports/${id}/shares`, { days: Number(d.days) });
       const url = `${location.origin}/${made.path.replace(/^\//, "")}`;
       try { await navigator.clipboard.writeText(url); toast("Share link copied. It is shown once; it opens this report only, read-only."); } catch { toast(`Share link (shown once): ${url}`); }
       await reload();
     }, "Create a view-only link") : null;
-    return el("details", {}, el("summary", {}, `Share links (${active.length} active)`), el("div", { class: "stack-sm" }, el("p", { class: "muted small" }, "A share link opens this report without signing in, read-only, until it expires or is revoked. Creation and revocation are audited."), make, rows));
+    return el("details", {}, el("summary", {}, `Share links (${active.length} active)`), el("div", { class: "stack-sm" }, el("p", { class: "muted small" }, "A share link opens this report without signing in, read-only, until it expires or is revoked. Administrators create and revoke them; both are audited."), make, rows));
   }
 
   function draw() {

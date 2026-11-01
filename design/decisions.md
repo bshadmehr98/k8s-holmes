@@ -176,16 +176,24 @@ revised by the owner at any time:
   cites. (b) A verification is judged by code for the known conditions (`pod.crashloop.oom`,
   `replicas.single`, `probe.missing`, `limits.missing`, `pdb.missing`, `service.no-backends`,
   `alert.missing`); for any other condition the outcome is `not_verified` with "compare by hand", never
-  `verified`. (c) The comparison of two runs hashes each piece of evidence without its bookkeeping keys
+  `verified`; a result that failed or did not observe (coverage other than `observed`, or no pods) says
+  nothing, and a proposal's `wait_ms` is honoured by refusing a verification before the wait after
+  `applied` has passed. (c) The comparison of two runs hashes each piece of evidence without its bookkeeping keys
   (`inventory_id`, `period_start`, `period_end`, `taken_at`), so a moving window is not "changed evidence".
   (d) The scheduler ticks every 60 s in the server, runs a due saved investigation as the person who saved it,
   moves `next_run_at` before starting (a failing start never loops) and purges once at its first tick and
   then daily; schedules run only while the server runs (§20). (e) A share token is random, shown once,
   stored as a SHA-256 hash, lasts 1 to 90 days (default 7), opens one report and nothing else of the API.
-  (f) Proposal states by role: investigators propose, reject and reopen; operators approve, mark applied and
-  verify; `verified` is only ever set by a verification. (g) The model comparison of §13.4 is the
-  fixed-evidence one; a free comparison is an investigation started with another endpoint, labelled by its
-  own model name, with no separate feature.
+  Shares are the administrator's, as §14.1 says. (f) Proposal states by role: investigators propose,
+  reject and reopen; operators approve, mark applied and verify; `verified` is only ever set by a
+  verification, which moves the findings it covers to `verified` from any state but `accepted_risk`.
+  (g) The model comparison of §13.4 is the fixed-evidence one, on a finished investigation only, recording
+  its model calls under the phase `comparison` and touching nothing else of the investigation; a free
+  comparison is an investigation started with another endpoint, labelled by its own model name, with no
+  separate feature. (h) A saved investigation's period rule becomes the run's window when it reads "the
+  last N hours/days"; any other rule is passed to the model as words. (i) The follow-through after a saved
+  run (compare, store the report, notify) is one function, `saved.finish_run`, called by the server for
+  runs only, never for follow-ups.
 - **Why:** each keeps the guarantee (24, 18, 13, 21) with the least machinery; (b) in particular refuses
   to let a model or a heuristic declare a fix verified.
 - **Status:** designer's choice from milestone 3; awaiting owner review.

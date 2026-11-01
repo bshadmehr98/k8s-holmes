@@ -8,16 +8,29 @@ from datetime import timedelta
 import pytest
 
 from k8sholmes import findings as findings_mod
-from k8sholmes import knowledge, reports
+from k8sholmes import knowledge, proposals, reports
+from k8sholmes.capabilities import Context
 from k8sholmes.errors import InvalidInput, NotFound
-from k8sholmes.records import AcceptedException, Call, Evidence, Finding, ModelCall, Report, ResourceRef, now
+from k8sholmes.records import (
+    AcceptedException,
+    Call,
+    Evidence,
+    Finding,
+    ModelCall,
+    Proposal,
+    Report,
+    ResourceRef,
+    now,
+)
 from tests.e2e.conftest import Demo
+
+SCHEDULER = ResourceRef(kind="Deployment", namespace="shop", name="scheduler")
 
 
 def counted_bodies_match(report: Report) -> None:
     for section in report.sections:
         for name, n in section["counted"].items():
-            if isinstance(section["body"], list) and name not in ("limitations",):
+            if isinstance(section["body"], list) and name != "limitations":
                 assert n == len(section["body"]), (section["heading"], name)
 
 
@@ -44,56 +57,105 @@ def test_every_number_is_counted_from_records_and_a_model_cannot_change_it(demo:
     assert "Every number below was counted from stored records" in text
     assert "There are 99 findings" in text  # the prose is quoted, the numbers are not taken from it
     assert f"- findings: {report.numbers['findings']}" in text
+    assert reports.revisions(store, again) == [store.get(Report, report.id), again]
 
 
 def test_the_incident_review_builds_its_timeline_from_evidence_and_names_the_bases(demo: Demo) -> None:
     inv = demo.ask("What changed before this problem started?")
-    report = reports.incident_review(demo.app.store, inv, by=f"user:{demo.user.id}")
+    store = demo.app.store
+    finding = store.find(Finding, {"investigation_id": inv.id})[0]
+    proposals.create_proposal(
+        store,
+        Proposal(
+            environment_id=demo.env.id,
+            investigation_id=inv.id,
+            finding_ids=[finding.id],
+            kind="task",
+            title="Review the rollout",
+            change="talk to the team",
+            intended_effect="no surprise rollouts",
+            verification_condition="change.before-incident",
+            author=f"user:{demo.user.id}",
+        ),
+    )
+    report = reports.incident_review(store, inv, by=f"user:{demo.user.id}")
     timeline = next(s for s in report.sections if s["heading"] == "Timeline")
     assert timeline["body"], "the demo's events and changes give the timeline its entries"
     assert report.numbers["timeline_entries"] == len(timeline["body"])
-    assert all(
-        entry["evidence"].startswith("evd") or entry["evidence"].startswith("ev")
-        for entry in timeline["body"]
-    )
+    evidence_ids = {e.id for e in store.find(Evidence, {"investigation_id": inv.id})}
+    assert all(entry["evidence"] in evidence_ids for entry in timeline["body"])
     assert [e["at"] for e in timeline["body"]] == sorted(e["at"] for e in timeline["body"])
     path = next(s for s in report.sections if "path" in s["heading"])
     assert all(edge["basis"] in ("defined", "observed", "inferred") for edge in path["body"])
     assert report.numbers["path_edges"] == len(path["body"])
-    assert report.numbers["path_defined"] + report.numbers["path_observed"] + report.numbers[
-        "path_inferred"
-    ] == len(path["body"])
+    bases = report.numbers["path_defined"] + report.numbers["path_observed"] + report.numbers["path_inferred"]
+    assert bases == len(path["body"])
+    proposed = next(s for s in report.sections if s["heading"] == "Proposals")
+    assert report.numbers["proposals"] == len(proposed["body"]) == 1
+    assert proposed["body"][0]["title"] == "Review the rollout"
+    assert reports.cited_evidence(report) >= set(finding.evidence_for) | {
+        e["evidence"] for e in timeline["body"]
+    }
+
+
+def review(demo: Demo, namespaces: list[str]) -> Report:
+    ctx = Context(
+        environment=demo.env, cluster=demo.app.cluster_for(demo.env), store=demo.app.store, user=demo.user
+    )
+    return reports.reliability_review(
+        demo.app.store, demo.app.registry, demo.app.auth, ctx, namespaces, by=f"user:{demo.user.id}"
+    )
 
 
 def test_the_reliability_review_counts_by_code_and_applies_exceptions(demo: Demo) -> None:
     store = demo.app.store
+    report = review(demo, ["shop"])
+    rows = next(s for s in report.sections if s["heading"] == "Safeguards per workload")["body"]
+    assert report.numbers["workloads"] == len(rows) > 0
+    assert report.numbers["single_replica"] == sum(
+        1 for r in rows if r["kind"] != "DaemonSet" and (r["replicas"] or 0) <= 1
+    )
+    assert all(r["accepted"] == [] for r in rows)
+    sources = next(s for s in report.sections if s["heading"] == "Scope and sources")["body"]
+    safeguards = store.get(Evidence, sources["safeguards_evidence"])
+    assert safeguards.source.startswith("k8s.safeguards")
+    assert all("accepted" not in r for r in safeguards.data["workloads"])  # evidence is never edited
+    assert sources["alert_coverage"] == "observed" and report.numbers["workloads_without_alerts"] > 0
     knowledge.create_exception(
         store,
         AcceptedException(
             environment_id=demo.env.id,
             condition="replicas.single",
-            scope=ResourceRef(kind="Deployment", namespace="shop", name="scheduler"),
+            scope=SCHEDULER,
             explanation="a singleton by design",
             approved_by=f"user:{demo.user.id}",
         ),
     )
-    inv = demo.ask("What reliability practices are we overlooking?")
-    evidence = store.find(Evidence, {"investigation_id": inv.id})
-    safeguards = next(e for e in evidence if e.source.startswith("k8s.safeguards"))
-    alerts = next((e for e in evidence if e.source.startswith("k8s.alert_rules")), None)
-    report = reports.reliability_review(store, demo.env.id, safeguards, alerts, by=f"user:{demo.user.id}")
-    rows = next(s for s in report.sections if s["heading"] == "Safeguards per workload")["body"]
-    assert report.numbers["workloads"] == len(rows)
-    assert report.numbers["single_replica"] == sum(
-        1 for r in rows if r["kind"] != "DaemonSet" and (r["replicas"] or 0) <= 1
+    knowledge.create_exception(
+        store,
+        AcceptedException(
+            environment_id=demo.env.id,
+            condition="pdb.missing",
+            scope=ResourceRef(kind="Deployment", namespace="shop", name=""),
+            applies_to="namespace",
+            explanation="no budgets in the shop namespace, by agreement",
+            approved_by=f"user:{demo.user.id}",
+        ),
     )
+    second = review(demo, ["shop"])
+    assert second.revision == 2
+    rows = next(s for s in second.sections if s["heading"] == "Safeguards per workload")["body"]
     scheduler = next(r for r in rows if r["workload"].endswith("/scheduler"))
     assert "replicas.single" in scheduler["accepted"]
     worker = next(r for r in rows if r["workload"].endswith("/worker"))
     assert "replicas.single" not in worker["accepted"]  # the exception matches one resource exactly
-    assert report.numbers["accepted_exceptions_applied"] == sum(len(r["accepted"]) for r in rows)
-    applied = next(s for s in report.sections if s["heading"] == "Exceptions applied")
-    assert applied["body"] and "scheduler" in applied["body"][0]
+    deployments_without_pdb = [r for r in rows if r["kind"] == "Deployment" and not r["pdb"]]
+    assert deployments_without_pdb and all("pdb.missing" in r["accepted"] for r in deployments_without_pdb)
+    assert second.numbers["accepted_exceptions_applied"] == sum(len(r["accepted"]) for r in rows)
+    applied = next(s for s in second.sections if s["heading"] == "Exceptions applied")
+    assert len(applied["body"]) == 2 and any("scheduler" in line for line in applied["body"])
+    # the calls went through the gate and are recorded against the environment
+    assert store.count(Call, {"capability_id": "k8s.safeguards"}) >= 2
 
 
 def test_edits_are_revisions_with_a_human_byline_apart_from_generated_text(demo: Demo) -> None:
@@ -109,9 +171,16 @@ def test_edits_are_revisions_with_a_human_byline_apart_from_generated_text(demo:
     assert next(s for s in edited.sections if s["heading"] == "The answer")["body"]["answer"] == generated
     text = reports.to_markdown(edited)
     assert f"> Edit by {author}" in text
-    assert text.index(generated[:30]) < text.index("> Edit by")
+    assert (
+        text.index("## The answer")
+        < text.index(generated[:30])
+        < text.index("> Edit by")
+        < text.index("## Findings")
+    )
     with pytest.raises(InvalidInput, match="no section"):
         reports.add_edit(store, edited, author=author, section="No such section", text="x")
+    with pytest.raises(InvalidInput, match="needs text"):
+        reports.add_edit(store, edited, author=author, section="The answer", text="  ")
     # a regeneration is a new revision; the edits stay with the revision they were made on
     second = reports.investigation_report(store, inv, by=author)
     assert second.revision == 2 and second.edits == []

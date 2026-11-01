@@ -7,12 +7,12 @@ import hashlib
 import json
 import logging
 import os
-import threading
+import re
 import urllib.request
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any, cast
 
+from k8sholmes.engine import Engine
 from k8sholmes.errors import InvalidInput
 from k8sholmes.records import (
     Comparison,
@@ -20,6 +20,7 @@ from k8sholmes.records import (
     Evidence,
     Finding,
     Investigation,
+    Period,
     Report,
     SavedInvestigation,
     Scope,
@@ -27,25 +28,26 @@ from k8sholmes.records import (
     now,
 )
 from k8sholmes.reports import section, store_report  # the comparison is a report kind of design §10
-from k8sholmes.retention import purge
 from k8sholmes.store import Store
 
 log = logging.getLogger("k8sholmes")
+VOLATILE_KEYS = ("inventory_id", "period_start", "period_end", "taken_at")  # bookkeeping, not observation
+LAST_HOURS = re.compile(r"the last (\d+(?:\.\d+)?) (hour|day)s?", re.IGNORECASE)
 
 
-def create_saved(store: Store, saved: SavedInvestigation) -> SavedInvestigation:
+def save(store: Store, saved: SavedInvestigation) -> SavedInvestigation:
+    """Validate and store a saved investigation (new or changed), computing its next run."""
     if not saved.question.strip():
         raise InvalidInput("a saved investigation needs a question")
     if saved.schedule.every_hours is not None and saved.schedule.every_hours < 1:
         raise InvalidInput("a schedule runs at most hourly")
-    saved = saved.model_copy(
-        update={"schedule": saved.schedule.model_copy(update={"next_run_at": _next_run(saved, now())})}
-    )
+    schedule = saved.schedule.model_copy(update={"next_run_at": next_run(saved, now())})
+    saved = saved.model_copy(update={"schedule": schedule})
     store.put(saved)
     return saved
 
 
-def _next_run(saved: SavedInvestigation, after: datetime) -> datetime | None:
+def next_run(saved: SavedInvestigation, after: datetime) -> datetime | None:
     schedule = saved.schedule
     if not schedule.enabled:
         return None
@@ -58,32 +60,34 @@ def _next_run(saved: SavedInvestigation, after: datetime) -> datetime | None:
     return None
 
 
+def period_of(rule: str) -> Period:
+    """The saved period rule as a window ending now; "the last N hours/days" is parsed, anything else is kept
+    as the rule alone for the model to read (design §12)."""
+    match = LAST_HOURS.search(rule)
+    if not match:
+        return Period(rule=rule)
+    amount, unit = float(match.group(1)), match.group(2).lower()
+    hours = amount * 24 if unit == "day" else amount
+    end = now()
+    return Period(start=end - timedelta(hours=hours), end=end, rule=rule)
+
+
 def start_run(
-    store: Store,
-    engine_start: Callable[..., Investigation],
-    saved: SavedInvestigation,
-    environment: Environment,
-    user: User,
+    store: Store, engine: Engine, saved: SavedInvestigation, environment: Environment, user: User
 ) -> Investigation:
     """A new investigation made from the saved one; the engine runs it (the runner, or the caller)."""
-    inv = engine_start(
+    inv = engine.start(
         environment=environment,
         question=saved.question,
         user=user,
         scope=Scope(namespaces=list(saved.scope.namespaces), resources=list(saved.scope.resources)),
+        period=period_of(saved.period_rule),
         model_endpoint_id=saved.model_endpoint_id,
         budgets=saved.budgets,
         saved_id=saved.id,
     )
-    updated = saved.model_copy(
-        update={
-            "runs": [*saved.runs, inv.id],
-            "schedule": saved.schedule.model_copy(
-                update={"last_run_at": now(), "next_run_at": _next_run(saved, now())}
-            ),
-        }
-    )
-    store.put(updated)
+    schedule = saved.schedule.model_copy(update={"last_run_at": now(), "next_run_at": next_run(saved, now())})
+    store.put(saved.model_copy(update={"runs": [*saved.runs, inv.id], "schedule": schedule}))
     return inv
 
 
@@ -125,9 +129,6 @@ def compare_runs(store: Store, saved: SavedInvestigation, after_id: str) -> Comp
     )
 
 
-VOLATILE_KEYS = ("inventory_id", "period_start", "period_end", "taken_at")  # bookkeeping, not observation
-
-
 def _evidence_hash(store: Store, evidence_id: str) -> str:
     """A digest of what was observed: the stored data without the keys that differ on every read."""
     found = store.get_many(Evidence, [evidence_id])
@@ -146,6 +147,10 @@ def comparison_report(store: Store, saved: SavedInvestigation, comparison: Compa
         if comparison.before_id
         else {}
     )
+    runs = {
+        i.id: i
+        for i in store.get_many(Investigation, [x for x in (comparison.before_id, comparison.after_id) if x])
+    }
 
     def rows(ids: list[str], pool: dict[str, Finding]) -> list[dict[str, Any]]:
         return [
@@ -154,6 +159,16 @@ def comparison_report(store: Store, saved: SavedInvestigation, comparison: Compa
             if i in pool
         ]
 
+    models = [
+        {
+            "run": run_id,
+            "model": runs[run_id].model_name,
+            "status": runs[run_id].status,
+            "at": runs[run_id].created_at.isoformat(),
+        }
+        for run_id in (comparison.before_id, comparison.after_id)
+        if run_id and run_id in runs
+    ]
     numbers = {
         "new": len(comparison.new),
         "resolved": len(comparison.resolved),
@@ -171,6 +186,7 @@ def comparison_report(store: Store, saved: SavedInvestigation, comparison: Compa
                 "summary": comparison.summary,
             },
         ),
+        section("The models used", "table", models, {"runs": len(models)}),
         section("New findings", "table", rows(comparison.new, after), {"new": len(comparison.new)}),
         section(
             "Resolved findings",
@@ -190,35 +206,31 @@ def comparison_report(store: Store, saved: SavedInvestigation, comparison: Compa
             {"count": comparison.unchanged, "note": "unchanged findings are counted, not repeated"},
         ),
     ]
-    return store_report(
-        store,
-        kind="comparison",
+    report = Report(
         environment_id=saved.environment_id,
-        subject_id=saved.id,
+        kind="comparison",
         title=f"Comparison: {saved.question}",
+        subject_id=saved.id,
+        generated_by=by,
         sections=sections,
         numbers=numbers,
-        by=by,
     )
+    return store_report(store, report)
 
 
 def notify(saved: SavedInvestigation, comparison: Comparison, link: str) -> bool:
     """Post the summary and a link to the webhook named by the environment variable; never evidence bodies."""
-    env_name = saved.notification.webhook_url_env
-    url = os.environ.get(env_name or "", "")
+    url = os.environ.get(saved.notification.webhook_url_env or "", "")
+    frequency, last_sent = saved.notification.frequency, saved.notification.last_sent_at
+    changed = bool(comparison.new or comparison.resolved or comparison.evidence_changed)
     if not url:
         return False
-    if (
-        saved.notification.frequency == "changes_only"
-        and not (comparison.new or comparison.resolved or comparison.evidence_changed)
-        and comparison.before_id is not None
-    ):
+    if frequency == "changes_only" and not changed and comparison.before_id is not None:
         return False
-    if (
-        saved.notification.frequency == "daily_digest"
-        and saved.notification.last_sent_at
-        and saved.notification.last_sent_at > now() - timedelta(hours=23)
-    ):
+    if frequency == "daily_digest" and last_sent and last_sent > now() - timedelta(hours=23):
+        return False
+    if not url.startswith(("https://", "http://")):
+        log.warning("notification for %s skipped: the webhook is not an http(s) URL", saved.id)
         return False
     payload = json.dumps(
         {
@@ -227,9 +239,6 @@ def notify(saved: SavedInvestigation, comparison: Comparison, link: str) -> bool
             "link": link,
         }
     ).encode()
-    if not url.startswith(("https://", "http://")):
-        log.warning("notification for %s skipped: the webhook is not an http(s) URL", saved.id)
-        return False
     request = urllib.request.Request(  # noqa: S310 - http(s) only, checked above
         url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
     )
@@ -241,66 +250,25 @@ def notify(saved: SavedInvestigation, comparison: Comparison, link: str) -> bool
         return False
 
 
-class Scheduler:
-    """The server's background thread: due saved investigations and the nightly purge (design §12, §16.3)."""
-
-    def __init__(
-        self,
-        store: Store,
-        *,
-        run_saved: Callable[[SavedInvestigation], None],
-        auth: Any,
-        interval_s: float = 60.0,
-        clock: Callable[[], datetime] = now,
-    ) -> None:
-        self.store = store
-        self.run_saved = run_saved
-        self.auth = auth
-        self.interval_s = interval_s
-        self.clock = clock
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self.last_purge: datetime | None = None
-
-    def tick(self) -> list[str]:
-        """One pass: start what is due; purge once a day. Returns the saved ids started."""
-        started: list[str] = []
-        at = self.clock()
-        for saved in self.store.find(SavedInvestigation):
-            due = (
-                saved.schedule.enabled
-                and saved.schedule.next_run_at is not None
-                and saved.schedule.next_run_at <= at
-            )
-            if due:
-                moved = saved.schedule.model_copy(update={"next_run_at": _next_run(saved, at)})
-                self.store.put(saved.model_copy(update={"schedule": moved}))  # a failing start never loops
-                try:
-                    self.run_saved(saved)
-                    started.append(saved.id)
-                except Exception:
-                    log.exception("scheduled run of %s failed to start", saved.id)
-        if self.last_purge is None or self.last_purge < at - timedelta(hours=24):
-            for env in self.store.find(Environment):
-                purge(self.store, self.auth, env)
-            self.last_purge = at
-        return started
-
-    def start(self) -> None:
-        def loop() -> None:
-            while not self._stop.wait(self.interval_s):
-                try:
-                    self.tick()
-                except Exception:
-                    log.exception("scheduler tick failed")
-
-        self._thread = threading.Thread(target=loop, name="k8sholmes-scheduler", daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+def finish_run(store: Store, inv: Investigation, link_base: str) -> tuple[Comparison, Report] | None:
+    """After a saved investigation's run ends: compare by code, store the report, notify (design §12)."""
+    if not inv.saved_id or inv.status not in ("completed", "partial"):
+        return None
+    saved = store.get(SavedInvestigation, inv.saved_id)
+    comparison = compare_runs(store, saved, inv.id)
+    report = comparison_report(store, saved, comparison, by="scheduler")
+    if notify(saved, comparison, f"{link_base}{report.id}"):
+        notification = saved.notification.model_copy(update={"last_sent_at": now()})
+        store.put(store.get(SavedInvestigation, saved.id).model_copy(update={"notification": notification}))
+    return comparison, report
 
 
-__all__ = ["Scheduler", "compare_runs", "comparison_report", "create_saved", "notify", "start_run"]
+__all__ = [
+    "compare_runs",
+    "comparison_report",
+    "finish_run",
+    "notify",
+    "period_of",
+    "save",
+    "start_run",
+]

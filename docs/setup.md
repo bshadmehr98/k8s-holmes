@@ -33,9 +33,9 @@ cannot be chosen for investigations. Passing tests do not prove the model invest
 ## Users and roles
 
 `viewer` reads; `investigator` runs inspect capabilities, edits findings, writes knowledge, accepts
-exceptions, generates, edits and shares reports, proposes improvements and saves investigations; `operator`
-also runs probes, approves proposals, marks them applied and verifies them; an administrator does
-everything, including Settings. Roles are granted per environment.
+exceptions, generates and edits reports, proposes improvements and saves investigations; `operator` also
+runs probes, approves proposals, marks them applied and verifies them; an administrator does everything,
+including Settings and the view-only share links of reports. Roles are granted per environment.
 
 ## Schedules and notifications
 

@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from k8sholmes import proposals
 from k8sholmes.api import Api, Request, Response, dump, route
+from k8sholmes.capabilities import Context
 from k8sholmes.errors import InvalidInput
 from k8sholmes.records import Environment, Finding, Investigation, Proposal, Role, User
 
@@ -36,8 +37,8 @@ def list_proposals(api: Api, req: Request, params: dict[str, str]) -> Response:
 
 @route("POST", "/api/proposals")
 def create_proposal(api: Api, req: Request, params: dict[str, str]) -> Response:
-    body = api.body(req)
     api.user(req)
+    body = api.body(req)
     inv = api.app.store.get(Investigation, str(body.get("investigation_id", "")))
     user, env = api.env(req, inv.environment_id, "investigator")
     finding_ids = [str(f) for f in cast(list[Any], body.get("finding_ids") or [])]
@@ -64,6 +65,7 @@ def create_proposal(api: Api, req: Request, params: dict[str, str]) -> Response:
 
 @route("PATCH", "/api/proposals/(?P<id>[^/]+)")
 def set_proposal_state(api: Api, req: Request, params: dict[str, str]) -> Response:
+    api.user(req)
     body = api.body(req)
     state = str(body.get("state", ""))
     if state not in ROLE_FOR_STATE:
@@ -74,12 +76,13 @@ def set_proposal_state(api: Api, req: Request, params: dict[str, str]) -> Respon
     updated = proposals.set_state(
         api.app.store, proposal, cast(Any, state), by=f"user:{user.id}", note=str(body.get("note", ""))
     )
+    details = {"state": state}
     api.app.auth.audit(
         user.id,
         "proposal_state_changed",
         environment_id=proposal.environment_id,
         subject=f"proposal:{proposal.id}",
-        details={"state": state},
+        details=details,
     )
     return Response(200, {"proposal": dump(updated)})
 
@@ -88,21 +91,15 @@ def set_proposal_state(api: Api, req: Request, params: dict[str, str]) -> Respon
 def verify_proposal(api: Api, req: Request, params: dict[str, str]) -> Response:
     user, proposal = _proposal(api, req, params["id"], "operator")
     env = api.app.store.get(Environment, proposal.environment_id)
-    updated, after = proposals.verify(
-        api.app.store,
-        api.app.registry,
-        api.app.auth,
-        proposal=proposal,
-        environment=env,
-        cluster=api.app.cluster_for(env),
-        user=user,
-    )
+    ctx = Context(environment=env, cluster=api.app.cluster_for(env), store=api.app.store, user=user)
+    updated, after = proposals.verify(api.app.registry, api.app.auth, ctx, proposal)
     outcome = updated.verifications[-1]
+    details = {"outcome": outcome.outcome, "after_evidence": len(after)}
     api.app.auth.audit(
         user.id,
         "proposal_verified",
         environment_id=env.id,
         subject=f"proposal:{proposal.id}",
-        details={"outcome": outcome.outcome, "after_evidence": len(after)},
+        details=details,
     )
     return Response(200, {"proposal": dump(updated), "verification": dump(outcome)})

@@ -249,8 +249,20 @@ def _merge(earlier: Finding, candidate: Finding, author: str) -> Finding:
 
 
 def set_state(store: Store, finding: Finding, state: FindingState, *, author: str, note: str = "") -> Finding:
+    """A person moves a finding along TRANSITIONS (design §8.2)."""
     if state not in TRANSITIONS[finding.state]:
         raise InvestigationStateError(f"a finding cannot go from {finding.state} to {state}")
+    return _transition(store, finding, state, author=author, note=note)
+
+
+def mark_verified(store: Store, finding: Finding, *, author: str, note: str) -> Finding:
+    """A verification observed the condition absent: `verified` from any state but accepted risk (§11.2)."""
+    if finding.state in ("verified", "accepted_risk"):
+        return finding
+    return _transition(store, finding, "verified", author=author, note=note)
+
+
+def _transition(store: Store, finding: Finding, state: FindingState, *, author: str, note: str) -> Finding:
     change = f"state {finding.state} -> {state}" + (f": {note}" if note else "")
     revision = Revision(at=now(), author=author, change=change, before={"state": finding.state})
     updated = finding.model_copy(

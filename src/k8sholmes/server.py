@@ -18,8 +18,9 @@ from k8sholmes import saved as saved_mod
 from k8sholmes.api import Api, Request, Response
 from k8sholmes.app import App
 from k8sholmes.errors import InvalidInput
-from k8sholmes.records import Environment, Investigation, SavedInvestigation, User, now
+from k8sholmes.records import Environment, Investigation, SavedInvestigation, User
 from k8sholmes.runner import Runner
+from k8sholmes.scheduler import Scheduler
 
 log = logging.getLogger("k8sholmes")
 PAGE_DIR = Path(__file__).parent / "page"
@@ -164,10 +165,9 @@ class K8sHolmesServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], app: App, *, scheduler_interval_s: float = 60.0) -> None:
         super().__init__(address, Handler)
         self.app = app
-        self.runner = Runner(app.engine)
-        self.runner.on_finished = self._after_run
+        self.runner = Runner(app.engine, on_finished=self._after_run)
         self.api = Api(app, self.runner)
-        self.scheduler = saved_mod.Scheduler(
+        self.scheduler = Scheduler(
             app.store, run_saved=self._run_saved, auth=app.auth, interval_s=scheduler_interval_s
         )
         self.scheduler.start()
@@ -185,25 +185,18 @@ class K8sHolmesServer(ThreadingHTTPServer):
         """A scheduled run acts as the person who saved the investigation (design §12)."""
         user = self.app.store.get(User, saved.created_by)
         env = self.app.store.get(Environment, saved.environment_id)
-        inv = saved_mod.start_run(self.app.store, self.app.engine.start, saved, env, user)
+        inv = saved_mod.start_run(self.app.store, self.app.engine, saved, env, user)
         self.runner.run(inv.id, user)
 
-    def _after_run(self, inv: Investigation) -> None:
-        """After a saved investigation's run: the comparison by code, its report, the notification (§12)."""
-        if not inv.saved_id or inv.status not in ("completed", "partial"):
+    def _after_run(self, inv: Investigation, kind: str) -> None:
+        """After a saved investigation's run (not a follow-up): compare, store the report, notify (§12)."""
+        if kind != "run":
             return
-        saved = self.app.store.get(SavedInvestigation, inv.saved_id)
-        comparison = saved_mod.compare_runs(self.app.store, saved, inv.id)
-        report = saved_mod.comparison_report(self.app.store, saved, comparison, by="scheduler")
-        self.runner.publish(
-            "comparison", {"investigation_id": inv.id, "summary": comparison.summary, "report_id": report.id}
-        )
-        if saved_mod.notify(saved, comparison, f"{self.url}#/reports/{report.id}"):
-            self.app.store.put(
-                saved.model_copy(
-                    update={"notification": saved.notification.model_copy(update={"last_sent_at": now()})}
-                )
-            )
+        done = saved_mod.finish_run(self.app.store, inv, f"{self.url}#/reports/")
+        if done is not None:
+            comparison, report = done
+            payload = {"investigation_id": inv.id, "summary": comparison.summary, "report_id": report.id}
+            self.runner.publish("comparison", payload)
 
 
 def make_server(

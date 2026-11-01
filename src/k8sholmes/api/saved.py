@@ -13,6 +13,7 @@ from k8sholmes.records import (
     Investigation,
     Notification,
     Report,
+    Role,
     SavedInvestigation,
     Schedule,
     Scope,
@@ -20,7 +21,7 @@ from k8sholmes.records import (
 )
 
 
-def _saved(api: Api, req: Request, saved_id: str, role: Any) -> tuple[User, SavedInvestigation]:
+def _saved(api: Api, req: Request, saved_id: str, role: Role) -> tuple[User, SavedInvestigation]:
     api.user(req)
     saved = api.app.store.get(SavedInvestigation, saved_id)
     user, _ = api.env(req, saved.environment_id, role)
@@ -28,9 +29,11 @@ def _saved(api: Api, req: Request, saved_id: str, role: Any) -> tuple[User, Save
 
 
 def _schedule(body: dict[str, Any], current: Schedule) -> Schedule:
+    """The schedule with the body's changes, validated as a whole (a bad value is a 400, never a row)."""
     raw = cast(dict[str, Any], body.get("schedule") or {})
-    return current.model_copy(
-        update={
+    return Schedule.model_validate(
+        {
+            **current.model_dump(),
             "every_hours": float(raw["every_hours"]) if raw.get("every_hours") else None,
             "daily_at": str(raw["daily_at"]) if raw.get("daily_at") else None,
             "enabled": bool(raw.get("enabled", current.enabled)),
@@ -40,10 +43,11 @@ def _schedule(body: dict[str, Any], current: Schedule) -> Schedule:
 
 def _notification(body: dict[str, Any], current: Notification) -> Notification:
     raw = cast(dict[str, Any], body.get("notification") or {})
-    return current.model_copy(
-        update={
+    return Notification.model_validate(
+        {
+            **current.model_dump(),
             "webhook_url_env": str(raw["webhook_url_env"]) if raw.get("webhook_url_env") else None,
-            "frequency": str(raw.get("frequency") or current.frequency),
+            "frequency": raw.get("frequency") or current.frequency,
         }
     )
 
@@ -70,7 +74,7 @@ def create_saved(api: Api, req: Request, params: dict[str, str]) -> Response:
         notification=_notification(body, Notification()),
         created_by=user.id,
     )
-    saved = saved_mod.create_saved(api.app.store, saved)
+    saved = saved_mod.save(api.app.store, saved)
     api.app.auth.audit(
         user.id, "saved_investigation_created", environment_id=env.id, subject=f"saved:{saved.id}"
     )
@@ -90,7 +94,7 @@ def edit_saved(api: Api, req: Request, params: dict[str, str]) -> Response:
         updates["question"] = str(body["question"])
     if not updates:
         raise InvalidInput("nothing to change: pass schedule, notification or question")
-    saved = saved_mod.create_saved(api.app.store, saved.model_copy(update=updates))
+    saved = saved_mod.save(api.app.store, saved.model_copy(update=updates))
     api.app.auth.audit(
         user.id,
         "saved_investigation_changed",
@@ -105,7 +109,7 @@ def run_saved(api: Api, req: Request, params: dict[str, str]) -> Response:
     user, saved = _saved(api, req, params["id"], "investigator")
     env = api.app.store.get(Environment, saved.environment_id)
     api.app.model_for(saved.model_endpoint_id)
-    inv = saved_mod.start_run(api.app.store, api.app.engine.start, saved, env, user)
+    inv = saved_mod.start_run(api.app.store, api.app.engine, saved, env, user)
     api.runner.run(inv.id, user)
     return Response(201, {"investigation": dump(inv)})
 

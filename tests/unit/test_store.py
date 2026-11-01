@@ -107,3 +107,71 @@ def test_threads_get_their_own_connections(store: Store) -> None:
         t.join()
     assert errors == []
     assert store.count(records.Knowledge) == 80
+
+
+def test_a_version_1_store_gains_the_milestone_3_tables_and_the_new_records_round_trip(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "k8sholmes.db"
+    first = Store(path)
+    first.put(records.Environment(name="a", context="c"))
+    first.close()
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE schema_version SET version = 1")
+    for table in ("reports", "shares", "proposals", "saved_investigations"):
+        conn.execute(f"DROP TABLE {table}")
+    conn.commit()
+    conn.close()
+    s = Store(path)
+    assert s.schema_version == SCHEMA_VERSION == 2
+    assert s.count(records.Environment) == 1  # version 1 data survives the migration
+    report = records.Report(
+        environment_id="env_a",
+        kind="investigation",
+        title="t",
+        subject_id="inv_a",
+        generated_by="user:u",
+        sections=[{"heading": "h", "kind": "list", "body": ["x"], "counted": {}}],
+        numbers={"findings": 1},
+        edits=[records.ReportEdit(author="user:u", section="h", text="note")],
+    )
+    share = records.Share(
+        report_id=report.id,
+        environment_id="env_a",
+        token_hash="h" * 64,
+        created_by="user:u",
+        expires_at=records.now(),
+    )
+    proposal = records.Proposal(
+        environment_id="env_a",
+        investigation_id="inv_a",
+        finding_ids=["fnd_a"],
+        kind="task",
+        title="t",
+        change="c",
+        intended_effect="e",
+        verification_condition="x",
+        author="user:u",
+        verifications=[records.Verification(by="user:u", outcome="not_verified", condition="x")],
+    )
+    saved = records.SavedInvestigation(
+        environment_id="env_a",
+        question="q",
+        created_by="u",
+        schedule=records.Schedule(every_hours=2, next_run_at=records.now()),
+        notification=records.Notification(webhook_url_env="HOOK", frequency="daily_digest"),
+    )
+    for record in (report, share, proposal, saved):
+        s.put(record)
+    s.close()
+    again = Store(path)
+    assert again.find(records.Share, {"token_hash": "h" * 64})[0].id == share.id
+    assert (
+        again.find(records.Report, {"kind": "investigation", "subject_id": "inv_a"}, order_by="revision")[0]
+        .edits[0]
+        .text
+        == "note"
+    )
+    assert again.find(records.Proposal, {"state": "proposed"})[0].verifications[0].outcome == "not_verified"
+    assert again.get(records.SavedInvestigation, saved.id).notification.frequency == "daily_digest"
+    assert again.count(records.Share, {"expires_at": share.expires_at}) == 1

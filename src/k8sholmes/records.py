@@ -424,7 +424,7 @@ class ModelCall(Record):
 # Reports (design §10)
 
 
-ReportKind = Literal["live", "investigation", "incident_review", "reliability_review", "comparison"]
+ReportKind = Literal["investigation", "incident_review", "reliability_review", "comparison"]
 
 
 class ReportEdit(Record):

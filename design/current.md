@@ -103,7 +103,7 @@ src/k8sholmes/
   knowledge.py          knowledge notes and exceptions: matching, expiry, revocation, revisions (§9)
   reports.py            report kinds built from the store; Markdown and JSON export (§10)
   proposals.py          proposals and verifications (§11)
-  saved.py              saved investigations, schedules, run comparison, notifications (§12)
+  saved.py  scheduler.py   saved investigations, schedules, run comparison, notifications (§12); the server's scheduler thread (§12, §16.3)
   models.py             the Model port, the OpenAI-compatible client, capability tests, usage, the secrets file (§13)
   app.py                the composition root: the home folder, the store, auth, the registry, the engine, the demo
   server.py             the web server (standard library), the static page and the event stream (§15)

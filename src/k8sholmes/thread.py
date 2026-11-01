@@ -61,8 +61,11 @@ def framing_prompt(inv: Investigation) -> list[dict[str, Any]]:
 def framing_from(payload: dict[str, Any], inv: Investigation) -> Framing:
     """The model's framing reply as a record; the user's scope and period win where the reply is silent."""
     hours = float(payload.get("period_hours") or 24)
+    if inv.period.start and inv.period.end:  # a window the user or a saved investigation fixed wins (§12)
+        hours = (inv.period.end - inv.period.start).total_seconds() / 3600
+    end = now()
     period = Period(
-        start=now() - timedelta(hours=hours), end=now(), rule=inv.period.rule or f"the last {hours:g} hours"
+        start=end - timedelta(hours=hours), end=end, rule=inv.period.rule or f"the last {hours:g} hours"
     )
     resources_raw = cast(list[dict[str, Any]], payload.get("resources") or [])
     resources = [

@@ -6,20 +6,19 @@ from __future__ import annotations
 from typing import Any, cast
 
 from k8sholmes import reports
-from k8sholmes.api import PUBLIC_ROUTES, Api, Request, Response, dump, route
+from k8sholmes.api import Api, Request, Response, dump, route
 from k8sholmes.capabilities import Context
-from k8sholmes.errors import InvalidInput, K8sHolmesError
-from k8sholmes.records import Evidence, Finding, Investigation, Report, SavedInvestigation, Share, User
+from k8sholmes.errors import InvalidInput, InvestigationStateError, K8sHolmesError
+from k8sholmes.records import Finding, Investigation, Report, Role, SavedInvestigation, Share, User
 from k8sholmes.saved import compare_runs, comparison_report
 
-PUBLIC_ROUTES.add(("GET", "/api/shared/(?P<token>[^/]+)"))
-PUBLIC_ROUTES.add(("GET", "/api/shared/(?P<token>[^/]+)/markdown"))
+FINISHED = ("completed", "partial", "cancelled", "failed", "interrupted")
 
 
-def _report(api: Api, req: Request, report_id: str, role: str) -> tuple[User, Report]:
+def _report(api: Api, req: Request, report_id: str, role: Role) -> tuple[User, Report]:
     api.user(req)
     report = api.app.store.get(Report, report_id)
-    user, _ = api.env(req, report.environment_id, cast(Any, role))
+    user, _ = api.env(req, report.environment_id, role)
     return user, report
 
 
@@ -27,18 +26,15 @@ def _report(api: Api, req: Request, report_id: str, role: str) -> tuple[User, Re
 def list_reports(api: Api, req: Request, params: dict[str, str]) -> Response:
     _, env = api.env(req, req.query.get("env", ""), "viewer")
     rows = api.app.store.find(Report, {"environment_id": env.id}, order_by="generated_at DESC", limit=500)
-    out = [{k: v for k, v in dump(r).items() if k not in ("sections",)} for r in rows]
-    return Response(200, {"reports": out})
+    return Response(200, {"reports": [{k: v for k, v in dump(r).items() if k != "sections"} for r in rows]})
 
 
 @route("POST", "/api/reports")
 def generate_report(api: Api, req: Request, params: dict[str, str]) -> Response:
-    """A new revision of a report; the reliability review reads the cluster through the gate first."""
+    """A new revision of a report of the given kind (design §10)."""
     body = api.body(req)
     user, env = api.env(req, str(body.get("environment_id", "")), "investigator")
-    kind = str(body.get("kind", ""))
-    by = f"user:{user.id}"
-    store = api.app.store
+    kind, by, store = str(body.get("kind", "")), f"user:{user.id}", api.app.store
     if kind in ("investigation", "incident_review"):
         inv = store.get(Investigation, str(body.get("investigation_id", "")))
         if inv.environment_id != env.id:
@@ -48,19 +44,7 @@ def generate_report(api: Api, req: Request, params: dict[str, str]) -> Response:
     elif kind == "reliability_review":
         namespaces = [str(n) for n in cast(list[Any], body.get("namespaces") or [])]
         ctx = Context(environment=env, cluster=api.app.cluster_for(env), store=store, user=user)
-        read: dict[str, Evidence | None] = {}
-        for cap_id in ("k8s.safeguards", "k8s.alert_rules"):
-            call, evidence = api.app.registry.execute(cap_id, {"namespaces": namespaces}, ctx, api.app.auth)
-            store.put(call)
-            if evidence is not None:
-                store.put(evidence)
-            read[cap_id] = evidence
-        safeguards = read["k8s.safeguards"]
-        if safeguards is None:
-            raise InvalidInput(
-                "k8s.safeguards did not run here; the review needs it (see the capability's history)"
-            )
-        report = reports.reliability_review(store, env.id, safeguards, read["k8s.alert_rules"], by=by)
+        report = reports.reliability_review(store, api.app.registry, api.app.auth, ctx, namespaces, by=by)
     elif kind == "comparison":
         saved = store.get(SavedInvestigation, str(body.get("saved_id", "")))
         if saved.environment_id != env.id or not saved.runs:
@@ -69,12 +53,9 @@ def generate_report(api: Api, req: Request, params: dict[str, str]) -> Response:
         report = comparison_report(store, saved, comparison, by=by)
     else:
         raise InvalidInput("kind is one of investigation, incident_review, reliability_review, comparison")
+    details = {"kind": kind, "revision": report.revision}
     api.app.auth.audit(
-        user.id,
-        "report_generated",
-        environment_id=env.id,
-        subject=f"report:{report.id}",
-        details={"kind": kind, "revision": report.revision},
+        user.id, "report_generated", environment_id=env.id, subject=f"report:{report.id}", details=details
     )
     return Response(201, {"report": dump(report)})
 
@@ -90,10 +71,7 @@ def read_report(api: Api, req: Request, params: dict[str, str]) -> Response:
             "generated_by": r.generated_by,
             "edits": len(r.edits),
         }
-        for r in api.app.store.find(
-            Report, {"kind": report.kind, "subject_id": report.subject_id}, order_by="revision"
-        )
-        if r.environment_id == report.environment_id
+        for r in reports.revisions(api.app.store, report)
     ]
     shares = [dump(s) for s in api.app.store.find(Share, {"report_id": report.id}, order_by="created_at")]
     return Response(200, {"report": dump(report), "revisions": revisions, "shares": shares})
@@ -109,11 +87,8 @@ def report_markdown(api: Api, req: Request, params: dict[str, str]) -> Response:
 def report_export(api: Api, req: Request, params: dict[str, str]) -> Response:
     user, report = _report(api, req, params["id"], "viewer")
     api.app.auth.audit(user.id, "export", environment_id=report.environment_id, subject=f"report:{report.id}")
-    return Response(
-        200,
-        {"format_version": "1", "report": dump(report)},
-        headers={"Content-Disposition": f'attachment; filename="{report.id}.json"'},
-    )
+    headers = {"Content-Disposition": f'attachment; filename="{report.id}.json"'}
+    return Response(200, {"format_version": "1", "report": dump(report)}, headers=headers)
 
 
 @route("POST", "/api/reports/(?P<id>[^/]+)/edits")
@@ -135,18 +110,19 @@ def edit_report(api: Api, req: Request, params: dict[str, str]) -> Response:
 
 @route("POST", "/api/reports/(?P<id>[^/]+)/shares")
 def share_report(api: Api, req: Request, params: dict[str, str]) -> Response:
-    """A view-only link; the token appears in this response only (design §10)."""
-    user, report = _report(api, req, params["id"], "investigator")
+    """A view-only link, minted by an administrator (§14.1); the token appears in this response only."""
+    user, report = _report(api, req, params["id"], "admin")
     days = int((req.body or {}).get("days") or 7)
     if not 1 <= days <= 90:
         raise InvalidInput("a share lasts between 1 and 90 days")
     share, token = reports.create_share(api.app.store, report, by=f"user:{user.id}", days=days)
+    details = {"report_id": report.id, "expires_at": share.expires_at.isoformat()}
     api.app.auth.audit(
         user.id,
         "share_created",
         environment_id=report.environment_id,
         subject=f"share:{share.id}",
-        details={"report_id": report.id, "expires_at": share.expires_at.isoformat()},
+        details=details,
     )
     return Response(201, {"share": dump(share), "token": token, "path": f"/#/shared/{token}"})
 
@@ -155,7 +131,7 @@ def share_report(api: Api, req: Request, params: dict[str, str]) -> Response:
 def revoke_share(api: Api, req: Request, params: dict[str, str]) -> Response:
     api.user(req)
     share = api.app.store.get(Share, params["id"])
-    user, _ = api.env(req, share.environment_id, "investigator")
+    user, _ = api.env(req, share.environment_id, "admin")
     revoked = reports.revoke_share(api.app.store, share)
     api.app.auth.audit(
         user.id, "share_revoked", environment_id=share.environment_id, subject=f"share:{share.id}"
@@ -163,14 +139,14 @@ def revoke_share(api: Api, req: Request, params: dict[str, str]) -> Response:
     return Response(200, {"share": dump(revoked)})
 
 
-@route("GET", "/api/shared/(?P<token>[^/]+)")
+@route("GET", "/api/shared/(?P<token>[^/]+)", public=True)
 def shared(api: Api, req: Request, params: dict[str, str]) -> Response:
     """The report behind a share token: no session, view only, nothing else of the environment."""
     report = reports.shared_report(api.app.store, params["token"])
     return Response(200, {"report": dump(report), "shared": True})
 
 
-@route("GET", "/api/shared/(?P<token>[^/]+)/markdown")
+@route("GET", "/api/shared/(?P<token>[^/]+)/markdown", public=True)
 def shared_markdown(api: Api, req: Request, params: dict[str, str]) -> Response:
     report = reports.shared_report(api.app.store, params["token"])
     return Response(200, reports.to_markdown(report), content_type="text/markdown; charset=utf-8")
@@ -190,20 +166,29 @@ def compare_models(api: Api, req: Request, params: dict[str, str]) -> Response:
     api.user(req)
     inv = api.app.store.get(Investigation, params["id"])
     user, _ = api.env(req, inv.environment_id, "investigator")
+    if inv.status not in FINISHED:
+        raise InvestigationStateError(
+            f"investigation {inv.id} is {inv.status}; its evidence is still changing"
+        )
     endpoint_ids = [str(e) for e in cast(list[Any], api.body(req).get("endpoint_ids") or [])]
     if not endpoint_ids:
         raise InvalidInput("name at least one model endpoint to compare")
-    reviewed = [
+    stored = [
         dump(f) for f in api.app.store.find(Finding, {"investigation_id": inv.id}, order_by="created_at")
     ]
     results: list[dict[str, Any]] = []
     for endpoint_id in endpoint_ids:
-        model = api.app.model_for(endpoint_id)
         try:
+            model = api.app.model_for(endpoint_id)
             validated, reply = api.app.engine.conclude_only(inv, model, user)
         except K8sHolmesError as exc:
-            results.append({"endpoint_id": endpoint_id, "model": model.name, "error": str(exc)})
+            results.append({"endpoint_id": endpoint_id, "error": str(exc)})
             continue
+        usage = {
+            "prompt_tokens": reply.prompt_tokens,
+            "completion_tokens": reply.completion_tokens,
+            "duration_ms": reply.duration_ms,
+        }
         results.append(
             {
                 "endpoint_id": endpoint_id,
@@ -212,18 +197,15 @@ def compare_models(api: Api, req: Request, params: dict[str, str]) -> Response:
                 "findings": validated.findings,
                 "limitations": validated.limitations,
                 "problems": validated.problems,
-                "usage": {
-                    "prompt_tokens": reply.prompt_tokens,
-                    "completion_tokens": reply.completion_tokens,
-                    "duration_ms": reply.duration_ms,
-                },
+                "usage": usage,
             }
         )
+    details = {"endpoints": endpoint_ids}
     api.app.auth.audit(
         user.id,
         "models_compared",
         environment_id=inv.environment_id,
         subject=f"investigation:{inv.id}",
-        details={"endpoints": endpoint_ids},
+        details=details,
     )
-    return Response(200, {"kind": "fixed_evidence", "reviewed": reviewed, "results": results})
+    return Response(200, {"kind": "fixed_evidence", "stored_findings": stored, "results": results})

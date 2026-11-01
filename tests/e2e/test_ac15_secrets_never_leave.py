@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from k8sholmes import records, reports
+from k8sholmes import saved as saved_mod
 from k8sholmes.cli import main
 from k8sholmes.records import Evidence
 from k8sholmes.reports import report_text
@@ -84,7 +86,30 @@ def test_planted_secrets_appear_nowhere(demo: Demo, tmp_path: Path, capsys) -> N
     assert by_source["k8s.logs"].redactions >= 1  # the Authorization header in the log
     assert seen, "the model was called"
     assert all(clean(s) for s in seen), "what the model saw"
-    assert clean(report_text(demo.app, inv))
+    assert clean(report_text(demo.app.store, inv))
+    for report in (
+        reports.investigation_report(demo.app.store, inv, by="user:t"),
+        reports.incident_review(demo.app.store, inv, by="user:t"),
+    ):
+        assert clean(reports.to_markdown(report)) and clean(report.model_dump_json())
+    saved = saved_mod.save(
+        demo.app.store,
+        records.SavedInvestigation(
+            environment_id=demo.env.id, question="Why is worker unhealthy?", created_by=demo.user.id
+        ),
+    )
+    demo.app.store.put(saved.model_copy(update={"runs": [inv.id]}))
+    comparison = saved_mod.compare_runs(
+        demo.app.store, demo.app.store.get(records.SavedInvestigation, saved.id), inv.id
+    )
+    assert clean(
+        saved_mod.comparison_report(demo.app.store, saved, comparison, by="user:t").model_dump_json()
+    )
+    assert clean(
+        json.dumps(
+            {"text": f"K8sHolmes: {saved.question}\n{comparison.summary}", "summary": comparison.summary}
+        )
+    )
     out = tmp_path / "export"
     assert main(["--home", str(demo.app.home), "export", inv.id, "--out", str(out)]) == 0
     assert clean("".join(p.read_text() for p in out.rglob("*") if p.is_file()))

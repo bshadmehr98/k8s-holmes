@@ -3,13 +3,18 @@ summary, the model comparison, and the server's scheduler with the comparison af
 
 from __future__ import annotations
 
+import json
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from k8sholmes import saved as saved_mod
 from k8sholmes.app import App, grant_role
-from k8sholmes.records import AuditEntry, Report, SavedInvestigation
+from k8sholmes.records import AuditEntry, Investigation, Report, SavedInvestigation
 from k8sholmes.server import make_server, serve_in_thread
 from tests.helpers import Client
 
@@ -21,13 +26,15 @@ def investigated(client: Client, env_id: str, question: str = "Why is api restar
     return client.wait_idle(inv["id"])
 
 
-def test_reports_edits_shares_and_downloads(tmp_path: Path) -> None:
+def test_reports_edits_shares_and_downloads(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     app = App.open(tmp_path / "home", extensions=False)
     env, _ = app.setup_demo()
+    app.auth.create_user("root", "root-password", is_admin=True)
     server, _ = serve_in_thread(app)
     try:
         base = f"http://127.0.0.1:{server.server_port}"
         client = Client(base).sign_in("demo", "demo-password")
+        root = Client(base).sign_in("root", "root-password")
         bundle = investigated(client, env.id)
         inv_id = bundle["investigation"]["id"]
         live = client.ok("GET", f"/api/investigations/{inv_id}/live")["live"]
@@ -75,26 +82,35 @@ def test_reports_edits_shares_and_downloads(tmp_path: Path) -> None:
         )
         exported = client.ok("GET", f"/api/reports/{report['id']}/export")
         assert exported["format_version"] == "1" and exported["report"]["id"] == report["id"]
-        # a share: the token appears once; the public route needs no session; revoked, it is gone
-        status, payload = client.call("POST", f"/api/reports/{report['id']}/shares", {"days": 400})
+        # a share: an administrator mints it; the token appears once; the public route needs no session
+        status, _ = client.call("POST", f"/api/reports/{report['id']}/shares", {"days": 3})
+        assert status == 403  # the demo operator is not an administrator
+        status, payload = root.call("POST", f"/api/reports/{report['id']}/shares", {"days": 400})
         assert status == 400
-        shared = client.ok("POST", f"/api/reports/{report['id']}/shares", {"days": 3})
-        assert shared["token"] not in str(shared["share"]) and shared["path"].startswith("/#/shared/")
+        shared = root.ok("POST", f"/api/reports/{report['id']}/shares", {"days": 3})
+        token = shared["token"]
+        assert token not in json.dumps(shared["share"]) and shared["path"] == f"/#/shared/{token}"
+        assert all(token not in a.model_dump_json() for a in app.store.find(AuditEntry))
+        assert token not in caplog.text
         anonymous = Client(base)
-        public = anonymous.ok("GET", f"/api/shared/{shared['token']}")
+        public = anonymous.ok("GET", f"/api/shared/{token}")
         assert public["shared"] is True and public["report"]["id"] == report["id"]
-        status, text = anonymous.call("GET", f"/api/shared/{shared['token']}/markdown")
+        status, text = anonymous.call("GET", f"/api/shared/{token}/markdown")
         assert status == 200 and text.startswith("# ")
         status, _ = anonymous.call("GET", f"/api/reports/{report['id']}")
         assert status == 401  # the token opens one report, not the API
         status, _ = anonymous.call("GET", "/api/shared/nope")
         assert status == 404
         assert client.ok("GET", f"/api/reports/{report['id']}")["shares"][0]["id"] == shared["share"]["id"]
-        client.ok("POST", f"/api/shares/{shared['share']['id']}/revoke")
-        status, _ = anonymous.call("GET", f"/api/shared/{shared['token']}")
+        assert token not in json.dumps(client.ok("GET", f"/api/reports/{report['id']}")["shares"])
+        status, _ = client.call("POST", f"/api/shares/{shared['share']['id']}/revoke")
+        assert status == 403
+        root.ok("POST", f"/api/shares/{shared['share']['id']}/revoke")
+        status, _ = anonymous.call("GET", f"/api/shared/{token}")
         assert status == 404
         actions = {a.action for a in app.store.find(AuditEntry)}
         assert {"report_generated", "report_edited", "share_created", "share_revoked", "export"} <= actions
+        assert token not in caplog.text
         # a viewer reads but neither generates nor edits
         app.auth.create_user("reader", "reader-password")
         grant_role(app, "reader", env, "viewer")
@@ -116,14 +132,28 @@ def test_reports_edits_shares_and_downloads(tmp_path: Path) -> None:
         )
         assert status == 400
         compared = client.ok(
-            "POST", f"/api/investigations/{inv_id}/compare_models", {"endpoint_ids": ["mdl_demo"]}
+            "POST",
+            f"/api/investigations/{inv_id}/compare_models",
+            {"endpoint_ids": ["mdl_demo", "mdl_missing"]},
         )
-        assert compared["kind"] == "fixed_evidence" and len(compared["reviewed"]) == len(bundle["findings"])
-        result = compared["results"][0]
+        assert compared["kind"] == "fixed_evidence" and len(compared["stored_findings"]) == len(
+            bundle["findings"]
+        )
+        result, missing = compared["results"]
         assert result["model"] and result["findings"] and result["usage"]["prompt_tokens"] >= 0
+        assert (
+            missing["endpoint_id"] == "mdl_missing" and "error" in missing
+        )  # one failure never stops the others
         assert len(client.ok("GET", f"/api/investigations/{inv_id}")["findings"]) == len(
             bundle["findings"]
         )  # nothing stored
+        running = app.store.get(Investigation, inv_id)
+        app.store.put(running.model_copy(update={"status": "running"}))
+        status, _ = client.call(
+            "POST", f"/api/investigations/{inv_id}/compare_models", {"endpoint_ids": ["mdl_demo"]}
+        )
+        assert status == 409  # the evidence of a running investigation is still changing
+        app.store.put(running)
     finally:
         server.shutdown()
         server.server_close()
@@ -211,29 +241,47 @@ def test_proposals_from_the_api_follow_the_roles(tmp_path: Path) -> None:
         server.server_close()
 
 
-def test_saved_investigations_run_compare_and_schedule_on_the_server(tmp_path: Path) -> None:
-    app = App.open(tmp_path / "home", extensions=False)
-    env, _ = app.setup_demo()
-    server = make_server(app, port=0, scheduler_interval_s=0.2)
-    import threading
+class Opened:
+    def __enter__(self) -> Opened:
+        return self
 
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+
+def test_saved_investigations_run_compare_and_schedule_on_the_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = App.open(tmp_path / "home", extensions=False)
+    env, demo_user = app.setup_demo()
+    posted: list[dict[str, Any]] = []
+    monkeypatch.setenv("K8SHOLMES_TEST_HOOK", "https://hooks.example.test/saved")
+    monkeypatch.setattr(
+        saved_mod.urllib.request,
+        "urlopen",
+        lambda request, timeout=0: posted.append(json.loads(request.data)) or Opened(),
+    )
+    server = make_server(app, port=0, scheduler_interval_s=0.2)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         base = f"http://127.0.0.1:{server.server_port}"
         client = Client(base).sign_in("demo", "demo-password")
         status, _ = client.call("POST", "/api/saved", {"environment_id": env.id, "question": " "})
         assert status == 400
-        saved = client.ok(
+        status, payload = client.call(
             "POST",
             "/api/saved",
-            {
-                "environment_id": env.id,
-                "question": "Why is api restarting?",
-                "namespaces": ["shop"],
-                "schedule": {"every_hours": 24},
-                "notification": {"frequency": "every_run"},
-            },
-        )["saved"]
+            {"environment_id": env.id, "question": "q", "notification": {"frequency": "weekly"}},
+        )
+        assert status == 400 and "invalid input" in payload["error"]  # validated before anything is stored
+        body = {
+            "environment_id": env.id,
+            "question": "Why is api restarting?",
+            "namespaces": ["shop"],
+            "schedule": {"every_hours": 24},
+            "notification": {"frequency": "every_run", "webhook_url_env": "K8SHOLMES_TEST_HOOK"},
+        }
+        saved = client.ok("POST", "/api/saved", body)["saved"]
         assert saved["schedule"]["next_run_at"] and saved["model_endpoint_id"] == "mdl_demo"
         assert client.ok("GET", f"/api/saved?env={env.id}")["saved"][0]["id"] == saved["id"]
         first = client.ok("POST", f"/api/saved/{saved['id']}/run")["investigation"]
@@ -251,6 +299,17 @@ def test_saved_investigations_run_compare_and_schedule_on_the_server(tmp_path: P
         assert [r["id"] for r in read["runs"]] == [first["id"], second["id"]]
         assert read["comparisons"][1]["summary"].startswith("no meaningful change")
         assert [r["revision"] for r in read["reports"]] == [1, 2]  # one comparison report per finished run
+        assert len(posted) == 2 and posted[-1]["summary"] == read["comparisons"][1]["summary"]
+        assert posted[-1]["link"].startswith(server.url) and "256Mi" not in json.dumps(posted)
+        assert app.store.get(SavedInvestigation, saved["id"]).notification.last_sent_at is not None
+        # a follow-up on a run is not a new run: no third comparison, no third notification
+        client.ok("POST", f"/api/investigations/{second['id']}/follow_up", {"message": "and the worker?"})
+        client.wait_idle(second["id"])
+        time.sleep(0.2)
+        assert (
+            app.store.count(Report, {"kind": "comparison", "subject_id": saved["id"]}) == 2
+            and len(posted) == 2
+        )
         generated = client.ok(
             "POST", "/api/reports", {"environment_id": env.id, "kind": "comparison", "saved_id": saved["id"]}
         )["report"]
@@ -260,20 +319,14 @@ def test_saved_investigations_run_compare_and_schedule_on_the_server(tmp_path: P
         # a schedule that is due: the scheduler thread starts the run as the person who saved it
         due = client.ok("PATCH", f"/api/saved/{saved['id']}", {"schedule": {"every_hours": 1}})["saved"]
         stored = app.store.get(SavedInvestigation, due["id"])
-        app.store.put(
-            stored.model_copy(
-                update={
-                    "schedule": stored.schedule.model_copy(
-                        update={"next_run_at": datetime.now(UTC) - timedelta(minutes=1)}
-                    )
-                }
-            )
-        )
+        past = stored.schedule.model_copy(update={"next_run_at": datetime.now(UTC) - timedelta(minutes=1)})
+        app.store.put(stored.model_copy(update={"schedule": past}))
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and len(app.store.get(SavedInvestigation, saved["id"]).runs) < 3:
             time.sleep(0.05)
         runs = app.store.get(SavedInvestigation, saved["id"]).runs
         assert len(runs) == 3
+        assert app.store.get(Investigation, runs[-1]).created_by == demo_user.id
         next_run = app.store.get(SavedInvestigation, saved["id"]).schedule.next_run_at
         assert next_run is not None and next_run > datetime.now(UTC)
         client.wait_idle(runs[-1])
@@ -283,3 +336,4 @@ def test_saved_investigations_run_compare_and_schedule_on_the_server(tmp_path: P
     finally:
         server.shutdown()
         server.server_close()
+        assert not server.scheduler._thread.is_alive()  # type: ignore[union-attr]
