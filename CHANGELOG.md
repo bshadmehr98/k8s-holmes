@@ -6,6 +6,12 @@ design changed is in [`design/changes/`](design/changes/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `k8s.alert_rules` on a cluster without the PrometheusRule CRD states `cannot_answer`, as design §5.1
+  says, instead of being refused by the gate: connecting leaves a kind the cluster does not serve out of
+  the permission matrix (D-022).
+
 ### Removed
 
 - The error `InvalidCase` of the unreleased skeleton (there are no case files in the accepted design).

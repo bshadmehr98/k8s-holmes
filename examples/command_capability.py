@@ -55,10 +55,10 @@ with tempfile.TemporaryDirectory() as tmp:
     registry = Registry()
     load_command_capabilities(registry, folder, allowed_executables=[ECHO])
 
-    print("loaded:", [c["id"] for c in (cap.describe() for cap in registry._by_id.values())])
+    print("loaded:", [c["id"] for c in (cap.describe() for cap in registry.all())])
     print("broken:", registry.broken)
     assert registry.get("ops.greet").origin == "command ops.toml"
-    assert "ops.forbidden" not in registry._by_id
+    assert "ops.forbidden" not in {cap.id for cap in registry.all()}
     assert "allow-list" in registry.broken["command forbidden.toml"]
 
     store = Store(Path(tmp) / "k8sholmes.db")

@@ -1,11 +1,15 @@
 """The demo scenarios of design §17.2 against a real, throwaway local cluster (marker `cluster`).
 
+The shop is applied once for the module (the OOM wait is minutes), into the namespace `shop` that the
+demo investigator names.
+
 The assertions hold for any good investigation: the capability's coverage, a finding with the expected
 condition citing evidence that exists, a limitation where the source cannot answer. Never exact model text.
 """
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import pytest
@@ -13,21 +17,17 @@ import pytest
 from k8sholmes.app import App
 from k8sholmes.capabilities import Context
 from k8sholmes.records import Environment, Evidence, Finding, Investigation, ResourceRef, Scope, User
-from tests.cluster.conftest import has_crd
+from tests.cluster.conftest import _kubectl, has_crd
 
-pytestmark = pytest.mark.cluster
+pytestmark = [pytest.mark.cluster, pytest.mark.timeout(900)]
 
 
 def run_capability(
-    world: tuple[App, Environment, User], capability_id: str, inputs: dict[str, Any], namespace: str
+    world: tuple[App, Environment, User], capability_id: str, inputs: dict[str, Any]
 ) -> Evidence:
     app, env, user = world
     ctx = Context(environment=env, cluster=app.cluster_for(env), store=app.store, user=user)
-    settings = env.settings.model_copy(update={"capabilities": {capability_id: {"namespaces": [namespace]}}})
-    env = env.model_copy(update={"settings": settings})
-    call, evidence = app.registry.execute(
-        capability_id, inputs, Context(**{**ctx.__dict__, "environment": env}), app.auth
-    )
+    call, evidence = app.registry.execute(capability_id, inputs, ctx, app.auth)
     assert call.status == "completed", (call.status, call.reason)
     assert evidence is not None
     return evidence
@@ -48,32 +48,25 @@ def ask(
 
 def test_scenario_1_api_restarts_because_it_is_oom_killed(world, shop: str) -> None:
     health = run_capability(
-        world, "k8s.workload_health", {"kind": "Deployment", "namespace": shop, "name": "api"}, shop
+        world, "k8s.workload_health", {"kind": "Deployment", "namespace": shop, "name": "api"}
     )
     assert health.coverage == "observed" and health.error is None
     states = [s for p in health.data["pods"] for s in p["summary"].get("container_states", [])]
-    assert any(
-        s.get("last_terminated") == "OOMKilled" or s.get("waiting") == "CrashLoopBackOff" for s in states
-    )
-    changes = run_capability(world, "k8s.changes", {"namespace": shop, "name": "api", "since_hours": 1}, shop)
+    assert any(s.get("last_terminated") == "OOMKilled" for s in states)
+    changes = run_capability(world, "k8s.changes", {"namespace": shop, "name": "api", "since_hours": 1})
     assert changes.coverage == "observed"
     assert any("lower the memory limit" in str(c.get("change_cause", "")) for c in changes.data["changes"])
     inv, findings = ask(world, "Why is api restarting?", shop)
     assert inv.status in ("completed", "partial"), inv.limitations
     assert "pod.crashloop.oom" in findings
     oom = findings["pod.crashloop.oom"]
-    assert (
-        oom.resources == [ResourceRef(kind="Deployment", namespace=shop, name="api")]
-        or oom.resources[0].name == "api"
-    )
+    assert oom.resources == [ResourceRef(kind="Deployment", namespace=shop, name="api")]
     assert oom.evidence_for
 
 
 def test_scenario_2_a_service_without_backends_is_never_called_unused(world, shop: str) -> None:
-    backends = run_capability(
-        world, "k8s.service_backends", {"name": "legacy-export", "namespace": shop}, shop
-    )
-    assert backends.coverage in ("observed", "observed_absent") and backends.data["matching_pods"] == []
+    backends = run_capability(world, "k8s.service_backends", {"name": "legacy-export", "namespace": shop})
+    assert backends.coverage == "observed_absent" and backends.data["matching_pods"] == []
     inv, findings = ask(world, "Which services appear unused or obsolete?", shop)
     assert "service.no-backends" in findings
     assert "unused" not in findings["service.no-backends"].title.lower()
@@ -88,7 +81,7 @@ def test_scenario_2_a_service_without_backends_is_never_called_unused(world, sho
 
 
 def test_scenario_3_isolation_names_the_exposure_and_what_it_cannot_know(world, shop: str) -> None:
-    exposure = run_capability(world, "k8s.network_exposure", {"namespaces": [shop]}, shop)
+    exposure = run_capability(world, "k8s.network_exposure", {"namespaces": [shop]})
     assert exposure.coverage == "observed"
     assert any(
         str(s.get("service", "")).endswith("web") and s.get("type") == "LoadBalancer"
@@ -103,15 +96,13 @@ def test_scenario_3_isolation_names_the_exposure_and_what_it_cannot_know(world, 
 
 def test_scenario_4_missing_alerts_and_safeguards_counted_by_code(world, shop: str) -> None:
     _, env, _ = world
-    safeguards = run_capability(world, "k8s.safeguards", {"namespaces": [shop]}, shop)
+    safeguards = run_capability(world, "k8s.safeguards", {"namespaces": [shop]})
     assert safeguards.coverage == "observed"
     rows = {r["workload"].split("/")[-1]: r for r in safeguards.data["workloads"]}
     assert rows["scheduler"]["replicas"] == 1 and rows["scheduler"]["pdb"] is False
     assert rows["worker"]["liveness_probe"] is False and rows["worker"]["limits"] is False
-    assert safeguards.data["counts"]["single_replica"] == sum(
-        1 for r in rows.values() if (r["replicas"] or 0) <= 1
-    )
-    alerts = run_capability(world, "k8s.alert_rules", {"namespaces": [shop]}, shop)
+    assert safeguards.data["counts"]["single_replica"] == 2  # worker and scheduler
+    alerts = run_capability(world, "k8s.alert_rules", {"namespaces": [shop]})
     if has_crd(env.context, "prometheusrules.monitoring.coreos.com"):
         assert alerts.coverage == "observed"
         without = {w.split("/")[-1] for w in alerts.data["workloads_without_alerts"]}
@@ -134,23 +125,26 @@ def test_scenario_5_what_changed_before_the_problem(world, shop: str) -> None:
     assert cited.source.startswith("k8s.changes")
 
 
-def test_secrets_never_reach_the_recording(world, shop: str, tmp_path) -> None:
-    """A Secret in the namespace is listed by name only: its body never reaches evidence."""
+def test_a_secret_is_read_by_name_only(world, shop: str) -> None:
+    """A Secret in the namespace is listed and got by name only: its body is never fetched, so neither the
+    planted value nor its base64 form (how the API returns it) reaches evidence."""
     _, env, _ = world
-    from tests.cluster.conftest import _kubectl
-
+    planted = "tok_live_PLANTEDsecretvalue"
     _kubectl(
         "create",
         "secret",
         "generic",
         "planted",
-        f"--from-literal=token=tok_live_PLANTED{tmp_path.name}",
+        f"--from-literal=token={planted}",
         "-n",
         shop,
         context=env.context,
     )
-    inventory = run_capability(world, "k8s.inventory", {"namespaces": [shop]}, shop)
+    encoded = base64.b64encode(planted.encode()).decode()
+    inventory = run_capability(world, "k8s.inventory", {"namespaces": [shop]})
     blob = inventory.model_dump_json()
-    assert "planted" in blob and "tok_live_PLANTED" not in blob
-    got = run_capability(world, "k8s.get", {"kind": "Secret", "name": "planted", "namespace": shop}, shop)
-    assert "tok_live_PLANTED" not in got.model_dump_json()
+    assert "planted" in blob and planted not in blob and encoded not in blob
+    got = run_capability(world, "k8s.get", {"kind": "Secret", "name": "planted", "namespace": shop})
+    assert got.data["resource"]["data"] == "<never fetched>"
+    blob = got.model_dump_json()
+    assert planted not in blob and encoded not in blob

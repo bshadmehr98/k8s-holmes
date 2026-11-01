@@ -58,11 +58,11 @@ spec:
             requests: {memory: 16Mi, cpu: 10m}
             limits: {memory: 64Mi, cpu: 100m}
           livenessProbe:
-            exec: {command: ["/pause", "--version"]}
+            exec: {command: ["/pause", "-v"]}
             initialDelaySeconds: 5
             periodSeconds: 30
           readinessProbe:
-            exec: {command: ["/pause", "--version"]}
+            exec: {command: ["/pause", "-v"]}
             periodSeconds: 30
 ---
 apiVersion: v1
@@ -113,7 +113,7 @@ spec:
             requests: {memory: 16Mi, cpu: 10m}
             limits: {memory: 64Mi, cpu: 100m}
           livenessProbe:
-            exec: {command: ["/pause", "--version"]}
+            exec: {command: ["/pause", "-v"]}
             periodSeconds: 30
 ---
 apiVersion: v1

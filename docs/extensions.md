@@ -80,7 +80,7 @@ systems = ["node-disk"]
 coverage = "observed"      # the statement a successful run makes
 
 [capability.inputs.node]
-type = "string"            # string | int | float | bool
+type = "string"            # string | integer | number | boolean
 description = "The node's name."
 # default = "..."          # optional; without it the input is required
 ```

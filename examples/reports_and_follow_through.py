@@ -16,10 +16,10 @@ import tempfile
 from pathlib import Path
 
 from k8sholmes import proposals, reports
-from k8sholmes import saved as saved_mod
 from k8sholmes.app import App
 from k8sholmes.capabilities import Context
 from k8sholmes.records import Finding, Proposal, SavedInvestigation
+from k8sholmes.saved import compare_runs, save, start_run
 
 with tempfile.TemporaryDirectory() as tmp:
     app = App.open(Path(tmp) / "home", extensions=False)
@@ -27,11 +27,11 @@ with tempfile.TemporaryDirectory() as tmp:
     by = f"user:{user.id}"
 
     # a saved investigation, run once before and once after the fix
-    saved = saved_mod.save(
+    saved = save(
         app.store,
         SavedInvestigation(environment_id=env.id, question="Why is api restarting?", created_by=user.id),
     )
-    first = saved_mod.start_run(app.store, app.engine, saved, env, user)
+    first = start_run(app.store, app.engine, saved, env, user)
     app.engine.run(first.id, user)
 
     # a report with a human edit, apart from the generated text
@@ -87,8 +87,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # the second run, compared with the first by finding key
     saved = app.store.get(SavedInvestigation, saved.id)
-    second = saved_mod.start_run(app.store, app.engine, saved, env, user)
+    second = start_run(app.store, app.engine, saved, env, user)
     app.engine.run(second.id, user)
-    comparison = saved_mod.compare_runs(app.store, app.store.get(SavedInvestigation, saved.id), second.id)
+    comparison = compare_runs(app.store, app.store.get(SavedInvestigation, saved.id), second.id)
     print("comparison:", comparison.summary)
     assert oom.id in comparison.resolved

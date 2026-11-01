@@ -31,14 +31,14 @@ def model() -> OpenAICompatible:
 
 def test_the_capability_tests_tell_the_truth_about_a_real_endpoint(model: OpenAICompatible) -> None:
     results = run_capability_tests(model)
+    key = os.environ.get("K8SHOLMES_TEST_MODEL_KEY")
+    if key:  # checked first, so no later assertion message can print a detail holding the key
+        assert all(key not in r.detail for r in results.values()), "a result's detail holds the key"
     assert set(results) == set(TESTS)
     assert all(r.status in ("passed", "failed", "unsupported") for r in results.values())
     assert results["connectivity"].status == "passed", results["connectivity"].detail
     assert results["authentication"].status == "passed", results["authentication"].detail
     assert results["model"].status == "passed", results["model"].detail
-    key = os.environ.get("K8SHOLMES_TEST_MODEL_KEY")
-    if key:
-        assert all(key not in r.detail for r in results.values())  # a key never reaches a result
     # the gate on investigations follows the tool-calling result, whatever it is
     from k8sholmes.errors import InvalidInput
     from k8sholmes.models import usable_for_investigations

@@ -197,3 +197,14 @@ revised by the owner at any time:
 - **Why:** each keeps the guarantee (24, 18, 13, 21) with the least machinery; (b) in particular refuses
   to let a model or a heuristic declare a fix verified.
 - **Status:** designer's choice from milestone 3; awaiting owner review.
+
+## D-022: A kind the cluster does not serve is not a refused permission  (2026-11-01)
+
+- **Choice:** connecting leaves out of the permission matrix every checked kind the cluster does not serve
+  (a CRD that is not installed, such as `prometheusrules` or `servicemonitors`), instead of recording it
+  as `false`. The gate refuses only on `false`, so the capability runs and states `cannot_answer` itself.
+- **Why:** §5.1 says `k8s.alert_rules` is `cannot_answer` when the CRDs are absent, and the reliability
+  review counts on that coverage; recording the absence as a refusal made that branch unreachable, and a
+  cluster with PrometheusRule but no ServiceMonitor CRD refused the capability outright. Found by the
+  review of milestone 4.
+- **Status:** designer's choice; awaiting owner review.

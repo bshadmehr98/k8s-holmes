@@ -1,5 +1,6 @@
 """Fixtures for the cluster tests (CONTRIBUTING.md, "Cluster tests"): a throwaway local cluster chosen by
-`KUBECONFIG` and `K8SHOLMES_TEST_CONTEXT`, a fresh namespace per test, the manifests of design §17.2."""
+`KUBECONFIG` and `K8SHOLMES_TEST_CONTEXT`, and the demo shop of design §17.2 applied once per module into
+a namespace named `shop` (the demo investigator's namespace), deleted afterwards."""
 
 from __future__ import annotations
 
@@ -8,7 +9,6 @@ import os
 import shutil
 import subprocess
 import time
-import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -20,7 +20,8 @@ from k8sholmes.environments import connect, create_environment
 from k8sholmes.records import Environment, ModelEndpoint, User
 
 MANIFESTS = Path(__file__).parent / "manifests"
-LOCAL_CONTEXT_MARKERS = ("kind-", "minikube")
+LOCAL_CONTEXT_PREFIXES = ("kind-", "minikube")
+SHOP = "shop"
 
 
 def _kubectl(
@@ -45,7 +46,7 @@ def context() -> str:
         pytest.skip(
             "no kubeconfig context: set K8SHOLMES_TEST_CONTEXT (and KUBECONFIG) to a kind or minikube cluster"
         )
-    local = any(marker in name for marker in LOCAL_CONTEXT_MARKERS)
+    local = name.startswith(LOCAL_CONTEXT_PREFIXES)
     if not local and os.environ.get("K8SHOLMES_TEST_ALLOW_CONTEXT") != "1":
         pytest.skip(
             f"context {name!r} does not look like a throwaway cluster (kind-* or minikube); set K8SHOLMES_TEST_ALLOW_CONTEXT=1 to use it anyway"
@@ -56,29 +57,8 @@ def context() -> str:
     return name
 
 
-@pytest.fixture
-def namespace(context: str) -> Iterator[str]:
-    """A fresh namespace named after the test, deleted afterwards even when the test fails."""
-    name = f"k8sholmes-{uuid.uuid4().hex[:8]}"
-    _kubectl("create", "namespace", name, context=context)
-    try:
-        yield name
-    finally:
-        _kubectl("delete", "namespace", name, "--wait=false", context=context, check=False)
-
-
 def has_crd(context: str, name: str) -> bool:
     return _kubectl("get", "crd", name, context=context, check=False, timeout=30).returncode == 0
-
-
-@pytest.fixture
-def apply(context: str, namespace: str) -> Callable[[str], None]:
-    """Apply one manifest file of `tests/cluster/manifests/` into the test's namespace."""
-
-    def _apply(relative: str) -> None:
-        _kubectl("apply", "-n", namespace, "-f", str(MANIFESTS / relative), context=context)
-
-    return _apply
 
 
 def wait_for(predicate: Callable[[], bool], *, timeout_s: float, every_s: float = 2.0, what: str) -> None:
@@ -98,28 +78,39 @@ def pods(context: str, namespace: str, selector: str) -> list[dict]:
 def oom_killed(context: str, namespace: str) -> bool:
     for pod in pods(context, namespace, "app=api"):
         for status in pod.get("status", {}).get("containerStatuses", []):
-            last = status.get("lastState", {}).get("terminated", {})
-            if last.get("reason") == "OOMKilled" or status.get("restartCount", 0) >= 1:
+            if status.get("lastState", {}).get("terminated", {}).get("reason") == "OOMKilled":
                 return True
     return False
 
 
-@pytest.fixture
-def shop(context: str, namespace: str, apply: Callable[[str], None]) -> str:
-    """The demo shop applied into the namespace: the first api revision, then the lower limit, then the
-    alert rules when the CRD exists; waits until api has been OOM-killed at least once."""
-    apply("shop/00-workloads.yaml")
-    wait_for(lambda: bool(pods(context, namespace, "app=api")), timeout_s=120, what="api pods appearing")
-    apply("shop/10-api-lower-limit.yaml")
-    if has_crd(context, "prometheusrules.monitoring.coreos.com"):
-        apply("shop/20-alert-rules.yaml")
-    wait_for(lambda: oom_killed(context, namespace), timeout_s=240, every_s=5, what="api being OOM-killed")
-    return namespace
+@pytest.fixture(scope="module")
+def shop(context: str) -> Iterator[str]:
+    """The demo shop in the namespace `shop`: the first api revision, then the lower limit, then the alert
+    rules when the CRD exists; waits until api has been OOM-killed. Skips when `shop` already exists, so
+    nothing of the cluster's own is touched; deletes the namespace afterwards, even when a test fails."""
+    if _kubectl("get", "namespace", SHOP, context=context, check=False, timeout=30).returncode == 0:
+        pytest.skip(f"the namespace {SHOP!r} exists on context {context!r}; the suite needs to create it")
+    _kubectl("create", "namespace", SHOP, context=context)
+    try:
+
+        def apply(relative: str) -> None:
+            _kubectl("apply", "-n", SHOP, "-f", str(MANIFESTS / relative), context=context)
+
+        apply("shop/00-workloads.yaml")
+        wait_for(lambda: bool(pods(context, SHOP, "app=api")), timeout_s=120, what="api pods appearing")
+        apply("shop/10-api-lower-limit.yaml")
+        if has_crd(context, "prometheusrules.monitoring.coreos.com"):
+            apply("shop/20-alert-rules.yaml")
+        wait_for(lambda: oom_killed(context, SHOP), timeout_s=300, every_s=5, what="api being OOM-killed")
+        yield SHOP
+    finally:
+        _kubectl("delete", "namespace", SHOP, "--wait=false", context=context, check=False)
 
 
 @pytest.fixture
-def cluster(context: str, tmp_path: Path) -> Kubectl:
-    """The real adapter; with `K8SHOLMES_RECORD_TO` set, every request and reply is recorded there."""
+def cluster(context: str) -> Kubectl:
+    """The real adapter; with `K8SHOLMES_RECORD_TO` set, every request and reply is recorded there. The
+    recording is raw (the redactor runs on evidence, not here): hand-check it before committing it."""
     record = os.environ.get("K8SHOLMES_RECORD_TO")
     return Kubectl(context, record=Path(record) if record else None)
 

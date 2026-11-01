@@ -73,7 +73,8 @@ def connect(store: Store, environment: Environment, cluster: Cluster) -> Environ
     for verb, kind in PERMISSION_CHECKS:
         plain = kind.split(".")[0].split("/")[0]
         if plain not in kinds and kind not in ("pods/log", "pods.metrics.k8s.io", "nodes.metrics.k8s.io"):
-            matrix[f"{verb} {kind}"] = False  # the kind does not exist here (a CRD that is not installed)
+            # the kind does not exist here (a CRD that is not installed): nothing to refuse, so the
+            # capability runs and says `cannot_answer` itself (design §5.1, D-022)
             continue
         try:
             matrix[f"{verb} {kind}"] = bool(cluster.can_i(verb, kind))

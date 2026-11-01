@@ -5,8 +5,10 @@
 Only what the environment's permission matrix allows (`k8sholmes environments`, Settings → Environments):
 K8sHolmes asks the cluster `auth can-i` for each verb and kind at connection time and never runs a verb the
 matrix denies. The verbs are read-only: `get`, `logs`, `top`, `auth can-i`, `version`, `api-resources`.
-A capability reads only the kinds its catalog entry names (`capabilities.md`); an administrator can
-disable any capability or restrict it to namespaces per environment.
+The gate checks the verb and kind pairs each capability declares in its catalog entry
+(`capabilities.md`), but a capability is not confined to them: `k8s.get` and `k8s.list` read whatever kind
+they are asked for, and the inventory-based capabilities read every inventory kind the matrix allows. An
+administrator can disable any capability or restrict it to namespaces per environment.
 
 ## What is never read
 
@@ -26,9 +28,13 @@ recorded and shown (guarantee 23). The model's key never appears in a message.
 
 Runs on every result before storage and before any model message (design §14.3). It replaces:
 
-- the values of environment variables and object keys whose names contain `key`, `token`, `password`,
-  `passwd`, `secret`, `credential` or `auth`, in manifests and in command arguments shaped like
-  `--token VALUE` or `--token=VALUE`;
+- the values of environment variables whose names contain `key`, `token`, `password`, `passwd`,
+  `secret`, `credential` or `auth`, and command arguments with such names shaped like `--token VALUE` or
+  `--token=VALUE`;
+- the values of object keys whose names contain `password`, `passwd`, `token`, `secret`, `credential`,
+  `api_key`, `access_key` or `private_key` (with `-` or `_` or nothing between the words), except keys
+  that name or point at something (ending in `name`, `ref`, `path` or `file`, such as `secretName`); a bare
+  `key` or `auth` key is kept, because manifests use it structurally;
 - values shaped like JWTs, AWS keys, GitHub tokens, Google keys, Slack tokens, private keys and basic-auth
   URLs;
 - `Authorization: Bearer …` and `Authorization: Basic …` in logs and headers.
