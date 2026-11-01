@@ -137,6 +137,11 @@ manifests break things on purpose. They skip with a reason when `kubectl` or the
 check's evidence gathering is proven on the real cluster once and then recorded for the default suite
 (the `real-cluster-tests` skill in `.claude/skills/` says how).
 
+The hosted test (`-m hosted`, in `tests/hosted/`) runs one real model through the capability tests. It
+reads `K8SHOLMES_TEST_MODEL_URL` (an OpenAI-compatible base URL), `K8SHOLMES_TEST_MODEL` (the model name)
+and, when the endpoint wants one, `K8SHOLMES_TEST_MODEL_KEY`; a local llama.cpp or vLLM server needs no key.
+It skips with a reason when they are unset.
+
 ## Changing the design
 
 Design changes are written down before they are built:

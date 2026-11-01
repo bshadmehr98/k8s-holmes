@@ -770,7 +770,16 @@ endpoint); the retention purge from the scheduler thread, never touching pinned 
 the Reports page, the Report and Proposals tabs, saved investigations under Investigations (§15).
 Guarantees 11, 12, 13, 18 and 24 are tested.
 
-**Planned:** the real-cluster suite, the hosted model test and the user documentation (milestone 4).
+**Implemented (milestone 4, 2026-11-01):** the cluster suite (`tests/cluster/`, marker `cluster`): the
+demo shop as manifests applied to a fresh namespace of a throwaway kind or minikube cluster, the five
+scenarios of §17.2 asserted on coverage, condition codes and citations, a planted Secret that never reaches
+evidence, recording with `K8SHOLMES_RECORD_TO`; the hosted test (`tests/hosted/`, marker `hosted`): one
+real OpenAI-compatible endpoint through the capability tests of §13.2; the user documentation (setup, the
+command line, capabilities, extensions, records and exports, privacy, the demo) and four runnable examples,
+all executed by the default suite. Guarantees 1 to 24 are tested on the recording; the cluster suite runs
+them on a real cluster by hand.
+
+**Planned:** nothing before 0.1.0 is released; what comes after is a new change record.
 
 ## 20. Known limits (0.1)
 

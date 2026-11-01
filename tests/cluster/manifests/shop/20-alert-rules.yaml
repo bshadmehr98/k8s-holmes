@@ -1,0 +1,27 @@
+# Applied only when the cluster has the PrometheusRule CRD (the prometheus-operator): rules that name
+# web and postgres and none that names api, worker or scheduler (scenario 4).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: web
+spec:
+  groups:
+    - name: web
+      rules:
+        - alert: WebDown
+          expr: up{job="web"} == 0
+          for: 5m
+          labels: {severity: warning}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: postgres
+spec:
+  groups:
+    - name: postgres
+      rules:
+        - alert: PostgresDown
+          expr: pg_up{job="postgres"} == 0
+          for: 5m
+          labels: {severity: warning}
