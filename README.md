@@ -6,7 +6,7 @@ evidence, tests explanations, and answers with findings that cite their evidence
 know, and respect what your team has already decided is intentional. Reports are computed from the
 records. You bring the model; code does the deciding.
 
-**Status: the design is accepted and being built; nothing works yet.** The design is in
+**Status: the design is accepted and being built; milestones 1 and 2 of 4 work.** The design is in
 [design/current.md](design/current.md) (§19 says what is implemented); why it looks like this is in
 [design/README.md](design/README.md) and the owner's brief,
 [design/history/0001-owner-brief.md](design/history/0001-owner-brief.md).
@@ -43,13 +43,19 @@ records. You bring the model; code does the deciding.
 
 ## Install and run
 
-Not yet. When milestone 2 lands:
+Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). Until K8sHolmes is on PyPI, run it from a clone:
 
 ```text
-uv tool install k8sholmes
-k8sholmes demo              # a recorded environment and a scripted model, no cluster needed
-k8sholmes setup && k8sholmes serve
+uv sync
+uv run k8sholmes demo                 # a recorded environment and an offline investigator; no cluster, no model
+uv run k8sholmes serve                # http://127.0.0.1:8800/ ; sign in as demo / demo-password
 ```
+
+For your own environment: start `serve` on a fresh home, open the setup link it prints to create the first
+administrator, then in Settings connect an environment (a kubeconfig context on this host; only its name is
+stored), add your OpenAI-compatible model endpoint and run its capability tests, and grant roles. Real
+environments need `kubectl` on the PATH; K8sHolmes only ever runs its read-only verbs. The command line
+investigates too: `uv run k8sholmes investigate "Why is api restarting?" --env demo`.
 
 ## How this is being built
 

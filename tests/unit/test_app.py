@@ -29,19 +29,19 @@ def test_secrets_file_is_private_and_env_wins(tmp_path: Path, monkeypatch: pytes
 
 def test_model_for_refuses_without_an_endpoint_or_an_untested_one(tmp_path: Path) -> None:
     app = App.open(tmp_path / "home", extensions=False)
-    inv = records.Investigation(environment_id="e", question="q", created_by="u")
     with pytest.raises(InvalidInput, match="no model endpoint is configured"):
-        app.model_for(inv)
+        app.model_for(None)
     endpoint = records.ModelEndpoint(name="gateway", base_url="http://x/v1", model="m", is_default=True)
     app.store.put(endpoint)
     with pytest.raises(InvalidInput, match="has not been tested"):
-        app.model_for(inv)
+        app.model_for(None)
     tested = endpoint.model_copy(
         update={"tests": {"tool_calling": records.CapabilityTestResult(status="passed")}}
     )
     app.store.put(tested)
-    assert app.model_for(inv).name == "m"
-    assert isinstance(app.model_for(inv.model_copy(update={"model_endpoint_id": "mdl_demo"})), DemoModel)
+    assert app.model_for(None).name == "m"
+    assert app.model_for(endpoint.id).name == "m"
+    assert isinstance(app.model_for("mdl_demo"), DemoModel)
 
 
 def test_cluster_for_a_recording_or_kubectl_and_the_demo_user_is_an_operator(tmp_path: Path) -> None:

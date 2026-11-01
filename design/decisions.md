@@ -147,3 +147,23 @@ revised by the owner at any time:
   call with the error named; the engine marks an investigation `failed` on any other exception and re-raises
   it, so no row stays `running` without a process behind it.
 - **Status:** designer's choice from the review.
+
+
+## D-019: The shape of the runner  (2026-11-01)
+
+- **Question:** the interface needs investigations to run in the background and their events to reach a
+  streaming response; CONTRIBUTING lists event buses among the things to avoid.
+- **Choice:** one `Runner` class (design §3): a thread per running investigation, a dict of subscriber
+  queues per investigation that the engine's `on_event` hook feeds, idempotency keys scoped to the user and
+  the environment and forgotten when the run ends, and a safety net that marks a run `failed` if anything
+  escaped the engine. No separate bus object, no thread pool, no queue of pending runs: a few concurrent
+  users is the stated scale (§20).
+- **Status:** designer's choice from the review of M2.
+
+## D-020: Access and limits of the interface  (2026-11-01)
+
+- **Choice:** sessions last 7 days (`HttpOnly; SameSite=Strict`); the event stream sends a heartbeat every
+  15 s; request bodies are capped at 4 MiB; capability settings per environment are administered (§14.1
+  lists capabilities under `admin`), so the Capabilities page shows the settings form to administrators only;
+  the first administrator's token lives in the home folder until used (`auth.setup_token`).
+- **Status:** designer's choice from the review of M2.

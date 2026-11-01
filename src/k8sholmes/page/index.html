@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K8sHolmes</title>
+<link rel="icon" href="mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="K8sHolmes home">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
+        <path d="M4 3v18M4 3h5M4 21h5"/>
+        <path d="M20 3v18M20 3h-5M20 21h-5"/>
+        <path d="M12 9.5 14.5 12 12 14.5 9.5 12Z" fill="var(--accent)" stroke="var(--accent)" stroke-width="1"/>
+      </svg>
+      <span>K8sHolmes</span>
+    </a>
+    <nav class="nav" id="nav" aria-label="Main"></nav>
+    <span class="spacer"></span>
+    <div class="account" id="account"></div>
+  </header>
+  <main id="main" tabindex="-1"></main>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

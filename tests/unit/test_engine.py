@@ -576,3 +576,15 @@ def test_a_non_json_framing_is_a_limitation_and_a_non_json_conclusion_is_partial
     assert inv.status == "partial"
     assert any("framing was not the JSON" in lim for lim in inv.limitations)
     assert any("not the JSON object" in lim for lim in inv.limitations)
+
+
+def test_a_follow_up_during_a_run_is_a_redirect(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    inv = world.engine.start(environment=world.env, question="x", user=world.user)
+    world.store.put(inv.model_copy(update={"status": "running"}))
+    same = world.engine.follow_up(inv.id, world.user, "look at the worker too")
+    assert same.status == "running"
+    messages = world.store.find(records.Message, {"investigation_id": inv.id})
+    assert messages[-1].content == "look at the worker too" and messages[-1].round == 0
+    with pytest.raises(InvestigationStateError):
+        world.engine.resume(inv.id, world.user)  # running is not resumable

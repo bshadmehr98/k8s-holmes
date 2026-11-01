@@ -18,7 +18,7 @@ from k8sholmes.engine import Engine
 from k8sholmes.environments import connect, create_environment
 from k8sholmes.errors import InvalidInput, NotFound
 from k8sholmes.models import Model, OpenAICompatible, api_key_for, usable_for_investigations
-from k8sholmes.records import Environment, Investigation, ModelEndpoint, User
+from k8sholmes.records import Environment, ModelEndpoint, User
 from k8sholmes.store import Store
 from k8sholmes.testing.cluster import RecordedCluster
 from k8sholmes.testing.demo import build as build_demo
@@ -66,8 +66,8 @@ class App:
             return RecordedCluster(environment.recording)
         return Kubectl(environment.context, kubeconfig=environment.kubeconfig)
 
-    def model_for(self, investigation: Investigation) -> Model:
-        endpoint_id = investigation.model_endpoint_id
+    def model_for(self, endpoint_id: str | None) -> Model:
+        """The model behind an endpoint id, or the default; raises when none is configured or tested."""
         if endpoint_id == DEMO_ENDPOINT_ID:
             return DemoModel()
         if not endpoint_id:
