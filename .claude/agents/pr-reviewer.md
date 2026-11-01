@@ -12,20 +12,23 @@ code, the rules and the design. Do not edit files.
 2. **The rules.** `AGENTS.md`, `CONTRIBUTING.md`, the sections of `design/current.md` the change touches,
    and the change record named in the PR body.
 3. **Check:**
-   - correctness: logic, edge cases (no pods, a missing namespace, an empty events list, `None`), error
-     paths;
+   - correctness: logic, edge cases (no pods, a missing namespace, an empty events list, `None`, an
+     interrupted step), error paths;
    - explicit failure: errors are `K8sHolmesError` subclasses whose message says what to do; nothing is
-     swallowed; no silent fallback;
-   - **read-only** (AGENTS.md rule 3): `kubectl` is started only from the cluster adapter, as argument
-     lists with a timeout, with the verbs `design/current.md` §4 allows; nothing writes to the cluster;
-   - **code decides first** (rule 4): checks are code; a model call is whole-case and its reply is checked
-     by code; never one call per pod or per resource;
-   - **evidence** (rule 5): every finding names the evidence it rests on and carries its grade;
-   - case file: new keys optional, or `format_version` bumped with a migration path (§7);
-   - **secrets** (rule 6, §12): Secret values, tokens and kubeconfig credentials never reach the case
-     file, a report, a log or a model;
-   - the core imports no extra and no other package at import time;
-   - determinism: stable ids with `hashlib`, never `hash()`; time from one clock;
+     swallowed; no silent fallback; retryable and permanent failures told apart (§16.2);
+   - **the gate is code** (AGENTS.md rule 3): a capability runs only after the registry's permission check
+     from the user's role and the environment's settings; `kubectl` is started only from the cluster
+     adapter with the verbs `design/current.md` §5.3 allows; nothing writes to a cluster;
+   - **coverage and evidence** (rules 4, 5): every result states its coverage; every finding cites
+     evidence that exists; conclusions the coverage does not support are turned into limitations (§6.3,
+     §7.2); knowledge is never evidence;
+   - **exceptions match exactly** (§9.1): environment, condition and every resource;
+   - **records** (§2, §16): new columns and keys optional, or the schema version bumped with a migration;
+     ids and condition codes keep their meaning;
+   - **secrets and access** (rule 6, §14): nothing reaches a model message, a report, an export or a log
+     that the redactor has not seen; every API route checks the session, the role and the environment;
+   - the core imports no extra at import time;
+   - determinism: stable ids, explicit ordering, one clock;
    - public API: typed, in `__all__`, with a docstring; breaking changes follow
      `.claude/skills/deprecate-and-migrate/SKILL.md`;
    - process: a behaviour change without an accepted change record, or code that disagrees with it;

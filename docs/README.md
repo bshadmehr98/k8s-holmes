@@ -1,12 +1,14 @@
-# k8sholmes documentation
+# K8sHolmes documentation
 
-The user documentation is written as the first design is built. The design itself is in
+The user documentation is written as the milestones land. The design itself is in
 [`../design/`](../design/README.md); start with [`../design/current.md`](../design/current.md).
 
-| Page | What it will hold |
+| Page | What it holds |
 |---|---|
 | [`cli.md`](cli.md) | the `k8sholmes` command line |
-| [`checks.md`](checks.md) | the catalogue of checks, their ids and what each one looks at |
-| [`case-file.md`](case-file.md) | the case file: folder layout, `case.json`, its format version |
-| [`privacy.md`](privacy.md) | what is read from the cluster, what is never read, what a model sees |
-| [`adapters.md`](adapters.md) | reaching a cluster (`kubectl`, recordings) and the reasoning models |
+| [`setup.md`](setup.md) | installing, the home folder, environments, models and the first admin |
+| [`capabilities.md`](capabilities.md) | the catalog: ids, purposes, classes, permissions, coverage, settings and history; retired ids |
+| [`extensions.md`](extensions.md) | writing a capability as a Python entry point or a command capability |
+| [`records.md`](records.md) | the records, the store's schema versions and the export format |
+| [`privacy.md`](privacy.md) | what is read, what is never read, what a model receives, the redactor, retention and audit |
+| [`demo.md`](demo.md) | the demo environment, its scenarios, their expected findings and known limitations |
