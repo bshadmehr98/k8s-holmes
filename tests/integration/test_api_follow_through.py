@@ -274,7 +274,8 @@ def test_saved_investigations_run_compare_and_schedule_on_the_server(tmp_path: P
             time.sleep(0.05)
         runs = app.store.get(SavedInvestigation, saved["id"]).runs
         assert len(runs) == 3
-        assert app.store.get(SavedInvestigation, saved["id"]).schedule.next_run_at > datetime.now(UTC)
+        next_run = app.store.get(SavedInvestigation, saved["id"]).schedule.next_run_at
+        assert next_run is not None and next_run > datetime.now(UTC)
         client.wait_idle(runs[-1])
         off = client.ok("PATCH", f"/api/saved/{saved['id']}", {"schedule": {"enabled": False}})["saved"]
         assert off["schedule"]["next_run_at"] is None
