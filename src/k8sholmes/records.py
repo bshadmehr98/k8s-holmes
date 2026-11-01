@@ -122,7 +122,7 @@ class InventoryItem(Record):
 
 
 class Inventory(Record):
-    id: str = Field(default_factory=lambda: new_id("inv"))
+    id: str = Field(default_factory=lambda: new_id("ivt"))
     environment_id: str
     taken_at: datetime = Field(default_factory=now)
     namespaces: list[str] = []

@@ -70,25 +70,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _dispatch(args: argparse.Namespace) -> int:
     app = App.open(args.home or default_home())
-    if args.command == "demo":
-        return _demo(app, args)
-    if args.command == "environments":
-        for env in app.store.find(Environment, order_by="name"):
-            kind = "recording" if env.recording else f"context {env.context}"
-            connected = (
-                "connected " + env.connected_at.isoformat(timespec="minutes")
-                if env.connected_at
-                else "never connected"
-            )
-            print(f"{env.name}\t{kind}\t{connected}")
-        return 0
-    if args.command == "capabilities":
-        return _capabilities(app, args)
-    if args.command == "investigate":
-        return _investigate(app, args)
-    if args.command == "export":
-        return _export(app, args)
-    return 2
+    return COMMANDS[args.command](app, args)
+
+
+def _environments(app: App, args: argparse.Namespace) -> int:
+    for env in app.store.find(Environment, order_by="name"):
+        kind = "recording" if env.recording else f"context {env.context}"
+        connected = (
+            "connected " + env.connected_at.isoformat(timespec="minutes")
+            if env.connected_at
+            else "never connected"
+        )
+        print(f"{env.name}\t{kind}\t{connected}")
+    return 0
 
 
 def _acting_user(app: App, username: str | None) -> User:
@@ -251,6 +245,15 @@ def _export(app: App, args: argparse.Namespace) -> int:
         )
     print(f"exported {inv.id} to {out}")
     return 0
+
+
+COMMANDS = {
+    "demo": _demo,
+    "environments": _environments,
+    "capabilities": _capabilities,
+    "investigate": _investigate,
+    "export": _export,
+}
 
 
 if __name__ == "__main__":  # pragma: no cover

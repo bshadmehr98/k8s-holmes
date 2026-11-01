@@ -323,6 +323,7 @@ def build(*, at: datetime | None = None, after_fix: bool = False) -> FakeCluster
         "worker",
         "shop/worker:latest",
         probes=False,
+        args=["--export-token", PLANTED_TOKEN, "--queue", "amqp://rabbit.shop.svc:5672/"],
         env=[
             {"name": "EXPORT_TOKEN", "value": PLANTED_TOKEN},
             {"name": "QUEUE_URL", "value": "amqp://guest:guest@rabbit.shop.svc:5672/"},

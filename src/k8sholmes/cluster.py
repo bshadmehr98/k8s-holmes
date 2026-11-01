@@ -19,88 +19,47 @@ from k8sholmes.errors import ClusterUnreachable, InvalidInput, NotFound, Permiss
 from k8sholmes.records import ResourceRef
 
 ALLOWED_VERBS = frozenset({"get", "logs", "top", "auth", "version", "api-resources"})
-SECRET_KINDS = frozenset({"secret", "secrets"})
 
-# kubectl's short names and plurals -> Kind
-KINDS: dict[str, str] = {
-    "po": "Pod",
-    "pod": "Pod",
-    "pods": "Pod",
-    "deploy": "Deployment",
-    "deployment": "Deployment",
-    "deployments": "Deployment",
-    "rs": "ReplicaSet",
-    "replicaset": "ReplicaSet",
-    "replicasets": "ReplicaSet",
-    "sts": "StatefulSet",
-    "statefulset": "StatefulSet",
-    "statefulsets": "StatefulSet",
-    "ds": "DaemonSet",
-    "daemonset": "DaemonSet",
-    "daemonsets": "DaemonSet",
-    "job": "Job",
-    "jobs": "Job",
-    "cj": "CronJob",
-    "cronjob": "CronJob",
-    "cronjobs": "CronJob",
-    "svc": "Service",
-    "service": "Service",
-    "services": "Service",
-    "ep": "Endpoints",
-    "endpoints": "Endpoints",
-    "endpointslice": "EndpointSlice",
-    "endpointslices": "EndpointSlice",
-    "ing": "Ingress",
-    "ingress": "Ingress",
-    "ingresses": "Ingress",
-    "netpol": "NetworkPolicy",
-    "networkpolicy": "NetworkPolicy",
-    "networkpolicies": "NetworkPolicy",
-    "pvc": "PersistentVolumeClaim",
-    "persistentvolumeclaim": "PersistentVolumeClaim",
-    "persistentvolumeclaims": "PersistentVolumeClaim",
-    "pv": "PersistentVolume",
-    "persistentvolume": "PersistentVolume",
-    "persistentvolumes": "PersistentVolume",
-    "sc": "StorageClass",
-    "storageclass": "StorageClass",
-    "storageclasses": "StorageClass",
-    "hpa": "HorizontalPodAutoscaler",
-    "horizontalpodautoscaler": "HorizontalPodAutoscaler",
-    "horizontalpodautoscalers": "HorizontalPodAutoscaler",
-    "pdb": "PodDisruptionBudget",
-    "poddisruptionbudget": "PodDisruptionBudget",
-    "poddisruptionbudgets": "PodDisruptionBudget",
-    "sa": "ServiceAccount",
-    "serviceaccount": "ServiceAccount",
-    "serviceaccounts": "ServiceAccount",
-    "cm": "ConfigMap",
-    "configmap": "ConfigMap",
-    "configmaps": "ConfigMap",
-    "secret": "Secret",
-    "secrets": "Secret",
-    "no": "Node",
-    "node": "Node",
-    "nodes": "Node",
-    "ns": "Namespace",
-    "namespace": "Namespace",
-    "namespaces": "Namespace",
-    "ev": "Event",
-    "event": "Event",
-    "events": "Event",
-    "prometheusrule": "PrometheusRule",
-    "prometheusrules": "PrometheusRule",
-    "servicemonitor": "ServiceMonitor",
-    "servicemonitors": "ServiceMonitor",
+# Kind -> (plural, singular, short names): kubectl's names for each kind. The plural comes first.
+KIND_TABLE: dict[str, tuple[str, ...]] = {
+    "Pod": ("pods", "pod", "po"),
+    "Deployment": ("deployments", "deployment", "deploy"),
+    "ReplicaSet": ("replicasets", "replicaset", "rs"),
+    "StatefulSet": ("statefulsets", "statefulset", "sts"),
+    "DaemonSet": ("daemonsets", "daemonset", "ds"),
+    "Job": ("jobs", "job"),
+    "CronJob": ("cronjobs", "cronjob", "cj"),
+    "Service": ("services", "service", "svc"),
+    "Endpoints": ("endpoints", "ep"),
+    "EndpointSlice": ("endpointslices", "endpointslice"),
+    "Ingress": ("ingresses", "ingress", "ing"),
+    "NetworkPolicy": ("networkpolicies", "networkpolicy", "netpol"),
+    "PersistentVolumeClaim": ("persistentvolumeclaims", "persistentvolumeclaim", "pvc"),
+    "PersistentVolume": ("persistentvolumes", "persistentvolume", "pv"),
+    "StorageClass": ("storageclasses", "storageclass", "sc"),
+    "HorizontalPodAutoscaler": ("horizontalpodautoscalers", "horizontalpodautoscaler", "hpa"),
+    "PodDisruptionBudget": ("poddisruptionbudgets", "poddisruptionbudget", "pdb"),
+    "ServiceAccount": ("serviceaccounts", "serviceaccount", "sa"),
+    "ConfigMap": ("configmaps", "configmap", "cm"),
+    "Secret": ("secrets", "secret"),
+    "Node": ("nodes", "node", "no"),
+    "Namespace": ("namespaces", "namespace", "ns"),
+    "Event": ("events", "event", "ev"),
+    "PrometheusRule": ("prometheusrules", "prometheusrule"),
+    "ServiceMonitor": ("servicemonitors", "servicemonitor"),
 }
+_ALIASES: dict[str, str] = {alias: kind for kind, aliases in KIND_TABLE.items() for alias in aliases}
 
 
 def canonical_kind(kind: str) -> str:
     """`deploy`, `deployments` and `Deployment` are one kind."""
     key = kind.partition(".")[0].lower()
-    if key in KINDS:
-        return KINDS[key]
-    return kind[0].upper() + kind[1:]
+    return _ALIASES.get(key, kind[0].upper() + kind[1:])
+
+
+def plural_of(kind: str) -> str:
+    """The plural kubectl lists a kind by (`ingresses`, `networkpolicies`)."""
+    return KIND_TABLE.get(kind, (kind.lower() + "s",))[0]
 
 
 class Cluster(Protocol):
@@ -137,11 +96,11 @@ class Cluster(Protocol):
 
 
 def _is_secret(kind: str) -> bool:
-    return kind.lower() in SECRET_KINDS
+    return canonical_kind(kind) == "Secret"
 
 
 def _check_name(value: str, what: str) -> None:
-    if not value or value.startswith("-") or any(c.isspace() for c in value):
+    if not value or value.startswith("-") or "," in value or any(c.isspace() for c in value):
         raise InvalidInput(f"{what} {value!r} is not a valid Kubernetes name")
 
 
@@ -165,7 +124,7 @@ class Kubectl:
 
     # running
 
-    def _run(self, args: list[str]) -> str:
+    def _run(self, args: list[str], *, ok_codes: tuple[int, ...] = (0,)) -> str:
         verb = args[0]
         if verb not in ALLOWED_VERBS:
             raise PermissionRefused(f"kubectl {verb} is not a read-only verb K8sHolmes may run (design §5.3)")
@@ -189,7 +148,7 @@ class Kubectl:
             raise ClusterUnreachable(
                 f"kubectl {verb} timed out after {self.timeout_ms} ms (context {self.context})"
             ) from exc
-        if done.returncode != 0:
+        if done.returncode not in ok_codes:
             raise self._error(verb, done.stderr.strip())
         return done.stdout
 
@@ -343,24 +302,9 @@ class Kubectl:
         args = ["auth", "can-i", verb, kind]
         if namespace:
             args += ["--namespace", namespace]
-        command = [
-            self.executable,
-            "--context",
-            self.context,
-            *(["--kubeconfig", self.kubeconfig] if self.kubeconfig else []),
-            *args,
-        ]
-        try:
-            done = subprocess.run(  # noqa: S603
-                command, capture_output=True, text=True, timeout=self.timeout_ms / 1000, check=False
-            )
-        except FileNotFoundError as exc:
-            raise ToolMissing(f"{self.executable} is not on the PATH; install kubectl and try again") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise ClusterUnreachable(f"kubectl auth can-i timed out (context {self.context})") from exc
-        answer = done.stdout.strip().lower()
-        if done.returncode not in (0, 1) or answer not in ("yes", "no"):
-            raise self._error("auth can-i", done.stderr.strip() or done.stdout.strip())
+        answer = self._run(args, ok_codes=(0, 1)).strip().lower()  # "no" exits 1
+        if answer not in ("yes", "no"):
+            raise ClusterUnreachable(f"kubectl auth can-i answered {answer!r} for context {self.context}")
         allowed = answer == "yes"
         self._record_can_i(verb, kind, namespace, allowed)
         return allowed

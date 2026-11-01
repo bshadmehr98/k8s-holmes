@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, cast
 
-from k8sholmes.inventory import WORKLOAD_KINDS, get
+from k8sholmes.inventory import WORKLOAD_KINDS, dig
 from k8sholmes.records import InventoryItem, Relationship, ResourceRef
 
 
@@ -125,11 +125,11 @@ def _volume_references(item: InventoryItem) -> list[Relationship]:
     out: list[Relationship] = []
     for volume in cast(list[dict[str, Any]], item.summary.get("volumes") or []):
         label = f"volume {volume.get('name')}"
-        if claim := get(volume, "persistentVolumeClaim", "claimName"):
+        if claim := dig(volume, "persistentVolumeClaim", "claimName"):
             out.append(_named(item, "PersistentVolumeClaim", claim, "mounts", label))
-        if cm := get(volume, "configMap", "name"):
+        if cm := dig(volume, "configMap", "name"):
             out.append(_named(item, "ConfigMap", cm, "references", label))
-        if secret := get(volume, "secret", "secretName"):
+        if secret := dig(volume, "secret", "secretName"):
             out.append(_named(item, "Secret", secret, "references", f"{label} (name only)"))
     return out
 
@@ -138,14 +138,14 @@ def _env_references(item: InventoryItem, container: dict[str, Any]) -> list[Rela
     out: list[Relationship] = []
     for env in cast(list[dict[str, Any]], container.get("env") or []):
         label = f"env {env.get('name')}"
-        if cm := get(env, "valueFrom", "configMapKeyRef", "name"):
+        if cm := dig(env, "valueFrom", "configMapKeyRef", "name"):
             out.append(_named(item, "ConfigMap", cm, "references", label))
-        if secret := get(env, "valueFrom", "secretKeyRef", "name"):
+        if secret := dig(env, "valueFrom", "secretKeyRef", "name"):
             out.append(_named(item, "Secret", secret, "references", f"{label} (name only)"))
     for env_from in cast(list[dict[str, Any]], container.get("envFrom") or []):
-        if cm := get(env_from, "configMapRef", "name"):
+        if cm := dig(env_from, "configMapRef", "name"):
             out.append(_named(item, "ConfigMap", cm, "references", "envFrom"))
-        if secret := get(env_from, "secretRef", "name"):
+        if secret := dig(env_from, "secretRef", "name"):
             out.append(_named(item, "Secret", secret, "references", "envFrom (name only)"))
     return out
 
@@ -247,7 +247,7 @@ def _mentions(by_kind: dict[str, list[InventoryItem]]) -> list[Relationship]:
                     value = env.get("value")
                     if isinstance(value, str):
                         words.update(_WORD.findall(value))
-            for word in words:
+            for word in sorted(words):
                 host = word.split(".")[0]
                 namespace = (
                     word.split(".")[1]

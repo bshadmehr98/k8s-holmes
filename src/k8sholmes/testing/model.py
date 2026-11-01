@@ -78,9 +78,21 @@ class ScriptedModel:
             reply = text("I have nothing more to say.")
         if stream and on_delta and reply.content:
             on_delta(reply.content)
-        reply.streamed = stream
         return reply
 
     def saw(self, needle: str) -> bool:
         """Whether any message of any request contained `needle`."""
         return any(needle in json.dumps(r["messages"]) for r in self.requests)
+
+
+def check_model(model: Any) -> None:
+    """The contract every `Model` keeps (design §13.1): raises AssertionError. Offline-safe for fakes."""
+    reply = model.complete([{"role": "user", "content": "Say ok."}], max_tokens=8)
+    assert isinstance(reply, Reply), "complete returns a Reply"
+    assert isinstance(reply.content, str), "content is text"
+    assert all(isinstance(tc, ToolCall) and isinstance(tc.arguments, dict) for tc in reply.tool_calls), (
+        "tool calls are typed"
+    )
+    assert min(reply.prompt_tokens, reply.completion_tokens, reply.duration_ms) >= 0, "usage is counted"
+    assert isinstance(model.name, str), "a model has a name"
+    assert model.name, "a model has a name"

@@ -5,7 +5,6 @@ import pytest
 from k8sholmes import records
 from k8sholmes.environments import (
     PERMISSION_CHECKS,
-    cluster_for,
     connect,
     create_environment,
     latest_inventory,
@@ -50,15 +49,6 @@ def test_connect_failure_is_typed(tmp_path: Path) -> None:
 
     with pytest.raises(ClusterUnreachable, match="could not be reached: refused"):
         connect(store, env, Down())
-
-
-def test_cluster_for_a_recording(tmp_path: Path) -> None:
-    FakeCluster([{"kind": "Pod", "metadata": {"name": "p", "namespace": "a"}}], context="rec").save(
-        tmp_path / "rec"
-    )
-    env = records.Environment(name="demo", context="demo", recording=str(tmp_path / "rec"))
-    assert cluster_for(env).context == "rec"
-    assert cluster_for(records.Environment(name="real", context="kind-dev")).context == "kind-dev"
 
 
 def test_latest_inventory(tmp_path: Path) -> None:

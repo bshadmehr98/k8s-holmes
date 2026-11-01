@@ -30,7 +30,6 @@ class Reply:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     duration_ms: int = 0
-    streamed: bool = False
     structured_supported: bool | None = None  # None: not asked
 
 
@@ -62,15 +61,22 @@ def read_secrets(home: Path) -> dict[str, str]:
     path = secrets_path(home)
     if not path.exists():
         return {}
+    if path.stat().st_mode & 0o077:
+        raise InvalidInput(
+            f"{path} is readable by others; make it mode 0600 before K8sHolmes reads keys from it"
+        )
     return cast(dict[str, str], json.loads(path.read_text()))
 
 
 def write_secret(home: Path, endpoint_id: str, key: str) -> None:
+    """Store a key for an endpoint in the secrets file, created with mode 0600 (design §14.3)."""
     home.mkdir(parents=True, exist_ok=True)
     path = secrets_path(home)
     secrets = read_secrets(home)
     secrets[endpoint_id] = key
-    path.write_text(json.dumps(secrets, indent=1))
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(secrets, handle, indent=1)
     path.chmod(0o600)
 
 
@@ -130,7 +136,7 @@ class OpenAICompatible:
 
     def list_models(self) -> list[str]:
         with self._request("/models", None) as response:
-            payload = json.loads(response.read())
+            payload = self._decode(response.read())
         return [str(m.get("id")) for m in cast(list[dict[str, Any]], payload.get("data", []))]
 
     def complete(
@@ -165,7 +171,7 @@ class OpenAICompatible:
                 reply = (
                     self._read_stream(response, on_delta)
                     if stream
-                    else self._read_json(json.loads(response.read()))
+                    else self._read_json(self._decode(response.read()))
                 )
         except ModelFailure as exc:
             if schema is not None and exc.status == 400 and "response_format" in str(exc):
@@ -178,7 +184,7 @@ class OpenAICompatible:
                     },
                 ]
                 with self._request("/chat/completions", body) as response:
-                    reply = self._read_json(json.loads(response.read()))
+                    reply = self._read_json(self._decode(response.read()))
                 reply.structured_supported = False
             else:
                 raise
@@ -186,8 +192,16 @@ class OpenAICompatible:
             if schema is not None:
                 reply.structured_supported = True
         reply.duration_ms = int((time.monotonic() - started) * 1000)
-        reply.streamed = stream
         return reply
+
+    def _decode(self, body: bytes) -> Any:
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise ModelFailure(
+                f"{self.endpoint.name} answered with something that is not JSON: {body[:200]!r}",
+                retryable=False,
+            ) from exc
 
     @staticmethod
     def _read_json(payload: dict[str, Any]) -> Reply:
@@ -217,37 +231,53 @@ class OpenAICompatible:
             data = line[5:].strip()
             if data == "[DONE]":
                 break
-            chunk = cast(dict[str, Any], json.loads(data))
+            try:
+                chunk = cast(dict[str, Any], json.loads(data))
+            except json.JSONDecodeError as exc:
+                raise ModelFailure(
+                    f"a malformed streaming chunk arrived: {data[:200]!r}", retryable=False
+                ) from exc
             if chunk.get("usage"):
                 usage = cast(dict[str, Any], chunk["usage"])
             for choice in cast(list[dict[str, Any]], chunk.get("choices") or []):
-                delta = cast(dict[str, Any], choice.get("delta") or {})
-                if delta.get("content"):
-                    content.append(str(delta["content"]))
-                    if on_delta:
-                        on_delta(str(delta["content"]))
-                for tc in cast(list[dict[str, Any]], delta.get("tool_calls") or []):
-                    index = int(tc.get("index", 0))
-                    slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                    slot["id"] = tc.get("id") or slot["id"]
-                    function = cast(dict[str, Any], tc.get("function") or {})
-                    slot["name"] = function.get("name") or slot["name"]
-                    slot["arguments"] += str(function.get("arguments") or "")
+                finish = (
+                    _apply_delta(cast(dict[str, Any], choice.get("delta") or {}), content, calls, on_delta)
+                    or finish
+                )
                 if choice.get("finish_reason"):
                     finish = str(choice["finish_reason"])
-        tool_calls = _tool_calls(
-            [
-                {"id": c["id"], "function": {"name": c["name"], "arguments": c["arguments"]}}
-                for _, c in sorted(calls.items())
-            ]
-        )
+        ordered = [
+            {"id": c["id"], "function": {"name": c["name"], "arguments": c["arguments"]}}
+            for _, c in sorted(calls.items())
+        ]
         return Reply(
             content="".join(content),
-            tool_calls=tool_calls,
+            tool_calls=_tool_calls(ordered),
             finish_reason=finish,
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
         )
+
+
+def _apply_delta(
+    delta: dict[str, Any],
+    content: list[str],
+    calls: dict[int, dict[str, Any]],
+    on_delta: Callable[[str], None] | None,
+) -> str:
+    """One streamed delta: text appended, tool-call fragments merged by index."""
+    if delta.get("content"):
+        content.append(str(delta["content"]))
+        if on_delta:
+            on_delta(str(delta["content"]))
+    for tc in cast(list[dict[str, Any]], delta.get("tool_calls") or []):
+        index = int(tc.get("index", 0))
+        slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        slot["id"] = tc.get("id") or slot["id"]
+        function = cast(dict[str, Any], tc.get("function") or {})
+        slot["name"] = function.get("name") or slot["name"]
+        slot["arguments"] += str(function.get("arguments") or "")
+    return ""
 
 
 def _tool_calls(raw: list[dict[str, Any]]) -> list[ToolCall]:

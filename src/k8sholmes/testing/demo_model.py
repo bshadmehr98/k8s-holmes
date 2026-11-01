@@ -68,7 +68,10 @@ PLANS: dict[Kind, Callable[[str], list[tuple[str, dict[str, Any]]]]] = {
         ("k8s.safeguards", {"namespaces": ["shop"]}),
     ],
     "changes": lambda n: [("k8s.changes", {"namespace": "shop", "since_hours": 48})],
-    "impact": lambda n: [("k8s.service_backends", {"name": n, "namespace": "shop"})],
+    "impact": lambda n: [
+        ("k8s.inventory", {"namespaces": ["shop"]}),
+        ("k8s.service_backends", {"name": n, "namespace": "shop"}),
+    ],
     "safeguards": lambda n: [
         ("k8s.safeguards", {"namespaces": ["shop"]}),
         ("k8s.alert_rules", {"namespaces": ["shop"]}),
@@ -198,10 +201,13 @@ class DemoModel:
             findings += found
             limitations += limits
             next_steps += steps
-        if "k8s.service_backends" in by_call and kind in ("unused", "impact"):
-            answer, found, limits = self._from_backends(kind, by_call["k8s.service_backends"])
+        if "k8s.service_backends" in by_call and kind == "unused":
+            answer, found, limits = self._from_backends(by_call["k8s.service_backends"])
             findings += found
             limitations += limits
+        if kind == "impact" and "k8s.inventory" in by_call and "k8s.service_backends" in by_call:
+            answer, found = self._from_impact(name, by_call["k8s.inventory"], by_call["k8s.service_backends"])
+            findings += found
         if "k8s.network_exposure" in by_call:
             answer, found, limits = self._from_exposure(by_call["k8s.network_exposure"])
             findings += found
@@ -373,59 +379,66 @@ class DemoModel:
             answer = f"{name} shows no crash: {len(pods)} pods, {restarts} restarts."
         return answer, findings, limitations, steps
 
-    def _from_backends(
-        self, kind: Kind, backends: dict[str, Any]
-    ) -> tuple[str, list[dict[str, Any]], list[str]]:
+    def _from_backends(self, backends: dict[str, Any]) -> tuple[str, list[dict[str, Any]], list[str]]:
         data = cast(dict[str, Any], backends.get("data") or {})
         service = cast(dict[str, Any], cast(dict[str, Any], data.get("service") or {}).get("ref") or {})
         name = str(service.get("name", "service"))
         ref = [{"kind": "Service", "namespace": "shop", "name": name}]
-        if kind == "unused":
-            if backends.get("coverage") == "observed_absent":
-                finding = self._finding(
-                    f"{name} has no backends",
-                    f"The selector of {name} matches no pod; it has {data.get('ready_endpoints', 0)} ready "
-                    "endpoints, so requests to it fail. Whether anyone still calls it cannot be read here.",
-                    "service.no-backends",
-                    ref,
-                    [str(backends["evidence_id"])],
-                    uncertainty="traffic to the service is not observable here",
-                    missing=["request counts from a metrics or proxy source"],
-                    steps=["check the ingress and client configuration for callers before removing it"],
-                )
-                return (
-                    f"{name} has no backends and may be obsolete, but traffic is not observable here, "
-                    "so it cannot be called unused.",
-                    [finding],
-                    [
-                        (
-                            "traffic to services is cannot_answer with Kubernetes as the only source; a "
-                            "metrics or proxy source would settle it"
-                        )
-                    ],
-                )
-            return (
-                f"{name} has backends; nothing in the cluster marks it unused.",
-                [],
-                ["traffic to services is cannot_answer with Kubernetes as the only source"],
-            )
-        pods = cast(list[dict[str, Any]], data.get("matching_pods") or [])
+        traffic = (
+            "traffic to services is cannot_answer with Kubernetes as the only source; a metrics or proxy "
+            "source would settle it"
+        )
+        if backends.get("coverage") != "observed_absent":
+            return f"{name} has backends; nothing in the cluster marks it unused.", [], [traffic]
         finding = self._finding(
-            f"what depends on {name}",
-            f"{name} is backed by {len(pods)} pods; dependents defined in configuration and observed in "
-            "endpoints are listed in the inventory relationships.",
-            "custom.impact",
+            f"{name} has no backends",
+            f"The selector of {name} matches no pod; it has {data.get('ready_endpoints', 0)} ready "
+            "endpoints, so requests to it fail. Whether anyone still calls it cannot be read here.",
+            "service.no-backends",
             ref,
             [str(backends["evidence_id"])],
+            uncertainty="traffic to the service is not observable here",
+            missing=["request counts from a metrics or proxy source"],
+            steps=["check the ingress and client configuration for callers before removing it"],
+        )
+        answer = (
+            f"{name} has no backends and may be obsolete, but traffic is not observable here, "
+            "so it cannot be called unused."
+        )
+        return answer, [finding], [traffic]
+
+    def _from_impact(
+        self, name: str, inventory: dict[str, Any], backends: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Dependents of the service from the inventory's relationships, listed by basis (design §4.3)."""
+        raw = inventory.get("data")
+        data = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+        by_basis: dict[str, list[str]] = {"defined": [], "observed": [], "inferred": []}
+        relationships = data.get("relationships")
+        for r in cast(list[dict[str, Any]], relationships if isinstance(relationships, list) else []):
+            target = cast(dict[str, Any], r.get("target") or {})
+            if target.get("kind") == "Service" and target.get("name") == name and r.get("kind") != "owns":
+                source = cast(dict[str, Any], r.get("source") or {})
+                by_basis[str(r.get("basis"))].append(f"{source.get('kind')}/{source.get('name')}")
+        pods = cast(list[Any], cast(dict[str, Any], backends.get("data") or {}).get("matching_pods") or [])
+        parts = [f"{basis}: {', '.join(sorted(set(names))) or 'none'}" for basis, names in by_basis.items()]
+        explanation = (
+            f"If {name} fails, its {len(pods)} backing pods stop answering. Dependents by basis, "
+            + "; ".join(parts)
+            + ". Inferred dependents come from names in arguments or environment values and are listed apart."
+        )
+        ref = [{"kind": "Service", "namespace": "shop", "name": name}]
+        evidence = [str(inventory["evidence_id"]), str(backends["evidence_id"])]
+        finding = self._finding(
+            f"what depends on {name}",
+            explanation,
+            "custom.impact",
+            ref,
+            evidence,
             kind="hypothesis",
-            uncertainty="inferred dependents (names in arguments) are listed apart",
+            uncertainty="inferred dependents are not confirmed by configuration or endpoints",
         )
-        return (
-            f"If {name} fails, its {len(pods)} backing pods stop answering; dependents are read from "
-            "relationships with their basis.",
-            [finding],
-            [],
-        )
+        return f"If {name} fails: {'; '.join(parts)}.", [finding]
 
     def _from_exposure(self, exposure: dict[str, Any]) -> tuple[str, list[dict[str, Any]], list[str]]:
         data = cast(dict[str, Any], exposure.get("data") or {})

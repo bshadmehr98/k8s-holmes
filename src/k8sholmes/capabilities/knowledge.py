@@ -7,8 +7,7 @@ from typing import Any, cast
 from pydantic import BaseModel, Field
 
 from k8sholmes import knowledge
-from k8sholmes.capabilities import Capability, Context
-from k8sholmes.capabilities.kubernetes import Inputs
+from k8sholmes.capabilities import Capability, Context, Inputs
 from k8sholmes.errors import NotFound
 from k8sholmes.evidence import Result
 from k8sholmes.records import Evidence, Finding, ResourceRef
@@ -57,7 +56,7 @@ def run_knowledge_search(inputs: BaseModel, ctx: Context) -> Result:
                 "applies_to": e.applies_to,
                 "explanation": e.explanation,
                 "approved_by": e.approved_by,
-                "active": knowledge.is_active(e, ctx.now),
+                "active": knowledge.is_active(e),
                 "expires_at": e.expires_at.isoformat() if e.expires_at else None,
             }
             for e in exceptions
@@ -107,7 +106,7 @@ def run_evidence_recall(inputs: BaseModel, ctx: Context) -> Result:
             break
     evidence_ids = {e for f in chosen for e in f.evidence_for}
     evidence: list[dict[str, Any]] = []
-    for ev_id in list(evidence_ids)[: i.limit]:
+    for ev_id in sorted(evidence_ids)[: i.limit]:
         ev = _evidence_or_none(ctx, ev_id)
         if ev is None:
             continue

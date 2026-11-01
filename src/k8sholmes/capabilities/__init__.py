@@ -8,18 +8,19 @@ Nothing the model says reaches the gate; it sees only the user's role and the en
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from k8sholmes.auth import Auth
 from k8sholmes.cluster import Cluster
-from k8sholmes.errors import ClusterUnreachable, InvalidInput, K8sHolmesError, NotFound, PermissionRefused
-from k8sholmes.evidence import Result, evidence_from_result
+from k8sholmes.errors import ClusterUnreachable, InvalidInput, NotFound, PermissionRefused
+from k8sholmes.evidence import Result, evidence_from_result, redact_text
 from k8sholmes.records import (
     Call,
     CapabilityClass,
@@ -32,6 +33,7 @@ from k8sholmes.records import (
 )
 from k8sholmes.store import Store
 
+log = logging.getLogger("k8sholmes")
 ROLE_FOR_CLASS: dict[CapabilityClass, Role] = {
     "inspect": "investigator",
     "probe": "operator",
@@ -39,18 +41,23 @@ ROLE_FOR_CLASS: dict[CapabilityClass, Role] = {
 }
 
 
+class Inputs(BaseModel):
+    """The base of every capability's input model: unknown fields are refused (guarantee 2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 @dataclass(frozen=True)
 class Context:
-    """What a capability's `run` receives besides its inputs."""
+    """What a capability's `run` receives besides its inputs; the registry fills `settings` per capability."""
 
     environment: Environment
     cluster: Cluster
     store: Store
     user: User
-    settings: CapabilitySettings
+    settings: CapabilitySettings = field(default_factory=CapabilitySettings)
     investigation_id: str | None = None
     period: Period = field(default_factory=Period)
-    now: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -91,11 +98,11 @@ class Capability:
 @dataclass(frozen=True)
 class Refusal:
     reason: str
-    kind: str  # "disabled" | "class" | "role" | "permissions" | "unknown"
+    kind: str  # "disabled" | "class" | "role" | "permissions" | "namespace" | "unknown"
 
 
 class Registry:
-    """The catalog: lookup, search, validation, the gate, and execution into a call with evidence."""
+    """The catalog: lookup, validation, the gate, and execution into a call with evidence."""
 
     def __init__(self, capabilities: Iterable[Capability] = ()) -> None:
         self._by_id: dict[str, Capability] = {}
@@ -121,14 +128,6 @@ class Registry:
     def all(self) -> list[Capability]:
         return [self._by_id[k] for k in sorted(self._by_id)]
 
-    def search(self, text: str) -> list[Capability]:
-        needle = text.lower().strip()
-        return [
-            c
-            for c in self.all()
-            if needle in c.id.lower() or needle in c.title.lower() or needle in c.purpose.lower()
-        ]
-
     # validation and the gate
 
     @staticmethod
@@ -149,9 +148,7 @@ class Registry:
     def refusal(self, cap: Capability, user: User, environment: Environment, auth: Auth) -> Refusal | None:
         """Why this user may not run this capability here, or None when they may (design §5.2)."""
         settings = self.settings_for(cap, environment)
-        if not settings.enabled or (
-            cap.class_ == "probe" and not getattr(settings, "_explicit", True) and False
-        ):
+        if not settings.enabled:
             return Refusal(f"{cap.id} is disabled in environment {environment.name}", "disabled")
         if cap.class_ == "probe" and not environment.settings.probes_enabled:
             return Refusal(
@@ -184,6 +181,43 @@ class Registry:
             )
         return None
 
+    @staticmethod
+    def namespace_refusal(cap: Capability, inputs: BaseModel, settings: CapabilitySettings) -> Refusal | None:
+        """The per-capability namespace allow-list of design §5.4, applied to the validated inputs."""
+        if not settings.namespaces:
+            return None
+        asked: list[str] = []
+        fields = inputs.model_dump()
+        if isinstance(fields.get("namespace"), str):
+            asked.append(fields["namespace"])
+        if isinstance(fields.get("namespaces"), list):
+            asked.extend(str(n) for n in fields["namespaces"])
+        outside = sorted(set(asked) - set(settings.namespaces))
+        if (
+            outside
+            or ("namespaces" in fields and not fields["namespaces"])
+            or ("namespace" in fields and fields["namespace"] is None and "namespaces" not in fields)
+        ):
+            wanted = ", ".join(outside) if outside else "every namespace"
+            return Refusal(
+                f"{cap.id} is limited to {', '.join(settings.namespaces)} here; {wanted} was asked",
+                "namespace",
+            )
+        return None
+
+    @staticmethod
+    def _refused(
+        call: Callable[..., Call], cap: Capability, refusal: Refusal, ctx: Context, auth: Auth
+    ) -> Call:
+        auth.audit(
+            ctx.user.id,
+            "call_refused",
+            environment_id=ctx.environment.id,
+            subject=f"capability:{cap.id}",
+            details={"reason": refusal.reason, "kind": refusal.kind},
+        )
+        return call("refused", refusal.reason)
+
     def permitted(self, cap: Capability, user: User, environment: Environment, auth: Auth) -> None:
         refusal = self.refusal(cap, user, environment, auth)
         if refusal is not None:
@@ -210,7 +244,7 @@ class Registry:
                 inputs=raw_inputs,
                 user_id=ctx.user.id,
                 status=status,  # type: ignore[arg-type]
-                reason=reason,
+                reason=redact_text(reason)[0],
                 duration_ms=duration_ms,
             )
 
@@ -220,46 +254,40 @@ class Registry:
             return call("invalid", str(exc)), None
         refusal = self.refusal(cap, ctx.user, ctx.environment, auth)
         if refusal is not None:
-            auth.audit(
-                ctx.user.id,
-                "call_refused",
-                environment_id=ctx.environment.id,
-                subject=f"capability:{cap.id}",
-                details={"reason": refusal.reason, "kind": refusal.kind},
-            )
-            return call("refused", refusal.reason), None
+            return self._refused(call, cap, refusal, ctx, auth), None
         try:
             inputs = self.validate(cap, raw_inputs)
         except InvalidInput as exc:
             return call("invalid", str(exc)), None
+        settings = self.settings_for(cap, ctx.environment)
+        refusal = self.namespace_refusal(cap, inputs, settings)
+        if refusal is not None:
+            return self._refused(call, cap, refusal, ctx, auth), None
+        ctx = dataclasses.replace(ctx, settings=settings)
         started = time.monotonic()
         try:
             result = cap.run(inputs, ctx)
-            status = "completed"
-            reason = ""
-        except (NotFound, PermissionRefused, ClusterUnreachable, K8sHolmesError) as exc:
+            status, reason = "completed", ""
+        except Exception as exc:  # the capability boundary: every failure becomes a recorded call
+            log.warning("capability %s failed: %s: %s", cap.id, type(exc).__name__, exc)
+            coverage = (
+                "cannot_answer" if isinstance(exc, PermissionRefused | ClusterUnreachable) else "no_data"
+            )
             result = Result(
                 summary=f"{cap.id} failed: {exc}",
                 data=None,
-                coverage="cannot_answer"
-                if isinstance(exc, PermissionRefused | ClusterUnreachable)
-                else "no_data",
+                coverage=coverage,
                 coverage_reason=str(exc),
-                error=str(exc),
+                error=f"{type(exc).__name__}: {exc}",
             )
-            status = "failed"
-            reason = str(exc)
-        duration_ms = int((time.monotonic() - started) * 1000)
-        made = call(status, reason, duration_ms)
+            status, reason = "failed", str(exc)
+        made = call(status, reason, int((time.monotonic() - started) * 1000))
         evidence = evidence_from_result(
             result,
-            source=cap.id,
-            systems=list(cap.systems),
+            made,
             query=inputs.model_dump(mode="json"),
             environment_id=ctx.environment.id,
-            investigation_id=ctx.investigation_id,
-            step_id=step_id,
-            call_id=made.id,
-            max_bytes=ctx.settings.max_log_bytes,
+            systems=list(cap.systems),
+            max_bytes=settings.max_log_bytes,
         )
         return made.model_copy(update={"evidence_id": evidence.id}), evidence

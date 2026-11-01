@@ -11,10 +11,11 @@ import re
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from k8sholmes.cluster import canonical_kind
 from k8sholmes.errors import InvalidInput, NotFound
+from k8sholmes.inventory import dig
 from k8sholmes.records import ResourceRef
 
 _SELECTOR_SET = re.compile(r"^\s*([A-Za-z0-9_./-]+)\s+(in|notin)\s*\(([^)]*)\)\s*$")
@@ -64,12 +65,7 @@ def _split_requirements(selector: str) -> list[str]:
 
 
 def _lookup(obj: Any, path: str) -> Any:
-    value: Any = obj
-    for part in path.split("."):
-        if not isinstance(value, dict):
-            return None
-        value = cast(dict[str, Any], value).get(part)
-    return value
+    return dig(obj, *path.split("."))
 
 
 def matches_fields(obj: dict[str, Any], field_selector: str | None) -> bool:

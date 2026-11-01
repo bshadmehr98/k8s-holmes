@@ -109,15 +109,57 @@ def test_cancel_keeps_work_and_resume_continues(demo: Demo) -> None:
 def test_follow_up_sees_the_thread_and_revises(demo: Demo) -> None:
     inv = demo.ask("Why is api restarting?")
     first = {f.condition: f for f in demo.app.store.find(Finding, {"investigation_id": inv.id})}
-    assert "pod.crashloop.oom" in first
+    oom = first["pod.crashloop.oom"]
+    seen: list[str] = []
+
+    def follow(messages, tools, schema):
+        import json
+
+        seen.append(json.dumps(messages))
+        if schema:
+            evidence = [
+                e
+                for e in demo.app.store.find(Evidence, {"investigation_id": inv.id})
+                if e.source in ("k8s.workload_health", "k8s.changes")
+            ]
+            return structured(
+                {
+                    "answer": "the restarts follow the revision that lowered the limit",
+                    "findings": [
+                        {
+                            "title": oom.title,
+                            "explanation": "The limit was lowered to 256Mi in revision 3 and the container is OOMKilled since.",
+                            "kind": "observation",
+                            "condition": "pod.crashloop.oom",
+                            "resources": [{"kind": "Deployment", "namespace": "shop", "name": "api"}],
+                            "evidence_for": [e.id for e in evidence],
+                            "evidence_against": [],
+                            "uncertainty": "",
+                            "missing_information": [],
+                            "next_steps": [],
+                        }
+                    ],
+                    "limitations": [],
+                    "next_steps": [],
+                    "knowledge_used": [],
+                }
+            )
+        return text("I will look at the changes again.")
+
+    demo.app.engine.model_for = lambda inv: ScriptedModel(script=follow)
     after = demo.app.engine.follow_up(inv.id, demo.user, "What changed before this started?")
-    assert after.status in ("completed", "partial")
+    assert after.status == "completed", after.limitations
     messages = demo.app.store.find(Message, {"investigation_id": inv.id}, order_by="seq")
     assert messages[0].content == "Why is api restarting?"
     assert any(
         m.role == "user" and m.content == "What changed before this started?" and m.round == 1
         for m in messages
     )
+    assert all(oom.evidence_for[0] in s for s in seen), "the follow-up saw the earlier evidence"
     later = {f.condition: f for f in demo.app.store.find(Finding, {"investigation_id": inv.id})}
-    assert later["pod.crashloop.oom"].id == first["pod.crashloop.oom"].id  # revised, not replaced
-    assert len(later) >= len(first)
+    revised = later["pod.crashloop.oom"]
+    assert revised.id == oom.id
+    assert revised.revisions, "revised, not replaced"
+    assert revised.revisions[0].before["explanation"] == oom.explanation
+    assert revised.revisions[0].author == "model:scripted"
+    assert "revision 3" in revised.explanation

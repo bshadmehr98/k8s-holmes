@@ -109,3 +109,20 @@ def test_unused_isolated_and_traced_need_a_source(demo: Demo) -> None:
     texts = " ".join(inv.limitations)
     assert "unused" in texts and "isolated from" in texts and "the trace shows" in texts
     assert inv.status == "partial"
+
+
+def test_a_finding_without_supporting_evidence_is_never_stored(demo: Demo) -> None:
+    def conclude():
+        return {
+            "answer": "x",
+            "findings": [finding("baseless", "custom.baseless", [])],
+            "limitations": [],
+            "next_steps": [],
+            "knowledge_used": [],
+        }
+
+    model(demo, conclude)
+    inv = demo.ask("prove nothing")
+    assert demo.app.store.find(Finding, {"investigation_id": inv.id}) == []
+    assert inv.status == "partial"
+    assert any("no supporting evidence" in lim for lim in inv.limitations)

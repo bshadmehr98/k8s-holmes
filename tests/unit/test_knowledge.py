@@ -32,11 +32,13 @@ def store(tmp_path: Path) -> Store:
 def test_exception_matches_exactly(store: Store) -> None:
     exc = knowledge.create_exception(
         store,
-        environment_id=ENV,
-        condition="replicas.single",
-        scope=SCHED,
-        explanation="singleton scheduler",
-        approved_by="user:u",
+        records.AcceptedException(
+            environment_id=ENV,
+            condition="replicas.single",
+            scope=SCHED,
+            explanation="singleton scheduler",
+            approved_by="user:u",
+        ),
     )
     active = knowledge.exceptions_in_scope(store, ENV, [SCHED], [])
     assert knowledge.matching_exception(finding("replicas.single", SCHED), active) == (exc, None)
@@ -62,46 +64,58 @@ def test_namespace_wide_exception_needs_explicit_choice(store: Store) -> None:
     with pytest.raises(InvalidInput, match="needs its name"):
         knowledge.create_exception(
             store,
-            environment_id=ENV,
-            condition="c",
-            scope=records.ResourceRef(kind="Deployment", namespace="shop", name=""),
-            explanation="x",
-            approved_by="u",
+            records.AcceptedException(
+                environment_id=ENV,
+                condition="c",
+                scope=records.ResourceRef(kind="Deployment", namespace="shop", name=""),
+                explanation="x",
+                approved_by="u",
+            ),
         )
     exc = knowledge.create_exception(
         store,
-        environment_id=ENV,
-        condition="limits.missing",
-        scope=records.ResourceRef(kind="Deployment", namespace="dev", name=""),
-        explanation="dev has no limits on purpose",
-        approved_by="u",
-        applies_to="namespace",
+        records.AcceptedException(
+            environment_id=ENV,
+            condition="limits.missing",
+            scope=records.ResourceRef(kind="Deployment", namespace="dev", name=""),
+            explanation="dev has no limits on purpose",
+            approved_by="u",
+            applies_to="namespace",
+        ),
     )
     dev = records.ResourceRef(kind="Deployment", namespace="dev", name="anything")
     assert knowledge.matching_exception(finding("limits.missing", dev), [exc])[0] == exc
     assert knowledge.matching_exception(finding("limits.missing", API), [exc])[0] is None
     with pytest.raises(InvalidInput, match="explanation"):
         knowledge.create_exception(
-            store, environment_id=ENV, condition="c", scope=API, explanation="  ", approved_by="u"
+            store,
+            records.AcceptedException(
+                environment_id=ENV, condition="c", scope=API, explanation="  ", approved_by="u"
+            ),
         )
 
 
 def test_expired_and_revoked_exceptions_are_named_not_applied(store: Store) -> None:
     expired = knowledge.create_exception(
         store,
-        environment_id=ENV,
-        condition="replicas.single",
-        scope=SCHED,
-        explanation="x",
-        approved_by="u",
-        expires_at=records.now() - timedelta(days=1),
+        records.AcceptedException(
+            environment_id=ENV,
+            condition="replicas.single",
+            scope=SCHED,
+            explanation="x",
+            approved_by="u",
+            expires_at=records.now() - timedelta(days=1),
+        ),
     )
     exc, note = knowledge.matching_exception(finding("replicas.single", SCHED), [expired])
     assert exc is None
     assert note is not None
     assert "expired on" in note
     fresh = knowledge.create_exception(
-        store, environment_id=ENV, condition="replicas.single", scope=SCHED, explanation="x", approved_by="u"
+        store,
+        records.AcceptedException(
+            environment_id=ENV, condition="replicas.single", scope=SCHED, explanation="x", approved_by="u"
+        ),
     )
     revoked = knowledge.revoke_exception(store, fresh, "user:boss", "not true any more")
     assert revoked.revoked_by == "user:boss"
@@ -117,7 +131,10 @@ def test_expired_and_revoked_exceptions_are_named_not_applied(store: Store) -> N
 
 def test_revisions_keep_the_history(store: Store) -> None:
     exc = knowledge.create_exception(
-        store, environment_id=ENV, condition="c", scope=SCHED, explanation="first", approved_by="u"
+        store,
+        records.AcceptedException(
+            environment_id=ENV, condition="c", scope=SCHED, explanation="first", approved_by="u"
+        ),
     )
     later = records.now() + timedelta(days=30)
     revised = knowledge.revise_exception(

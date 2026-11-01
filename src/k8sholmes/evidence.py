@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, cast
 
-from k8sholmes.records import Coverage, Evidence
+from k8sholmes.records import Call, Coverage, Evidence
 
 REDACTED = "<redacted>"
 SENSITIVE_NAME = re.compile(r"(?i)(key|token|password|passwd|secret|credential|auth)")  # env var names
@@ -32,6 +32,12 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
     ("google_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    (
+        "key_like",
+        re.compile(
+            r"\b(?:sk|tok|key|pat|api|secret|token)[_-](?:live|test|prod|[a-z]{2,8})?[_-]?[A-Za-z0-9]{16,}\b"
+        ),
+    ),
     ("basic_auth_url", re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)")),
     (
         "authorization_header",
@@ -65,16 +71,33 @@ def redact(data: Any) -> tuple[Any, int]:
     if isinstance(data, str):
         return redact_text(data)
     if isinstance(data, list):
-        items: list[Any] = []
-        count = 0
-        for item in cast(list[Any], data):
-            cleaned, n = redact(item)
-            items.append(cleaned)
-            count += n
-        return items, count
+        return _redact_list(cast(list[Any], data))
     if isinstance(data, dict):
         return _redact_mapping(cast(dict[str, Any], data))
     return data, 0
+
+
+def _redact_list(items: list[Any]) -> tuple[list[Any], int]:
+    """Items one by one; in an argument list, the value after a flag with a telling name (`--token X`)."""
+    out: list[Any] = []
+    count = 0
+    redact_next = False
+    for item in items:
+        if redact_next and isinstance(item, str) and not item.startswith("-"):
+            out.append(REDACTED)
+            count += 1
+            redact_next = False
+            continue
+        redact_next = (
+            isinstance(item, str)
+            and item.startswith("-")
+            and "=" not in item
+            and bool(SENSITIVE_NAME.search(item))
+        )
+        cleaned, n = redact(item)
+        out.append(cleaned)
+        count += n
+    return out, count
 
 
 def _redact_mapping(mapping: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -140,35 +163,34 @@ class Result:
 
 def evidence_from_result(
     result: Result,
+    call: Call,
     *,
-    source: str,
-    systems: list[str],
     query: dict[str, Any],
     environment_id: str,
-    investigation_id: str | None,
-    step_id: str | None,
-    call_id: str | None,
+    systems: list[str],
     max_bytes: int = 262_144,
 ) -> Evidence:
-    """Hash the full result, redact it, cap it, and wrap it as evidence."""
+    """Hash the full result, redact everything that leaves (data, summary, query, reason, error), cap it."""
     full_hash = digest(result.data)
     cleaned, redactions = redact(result.data)
     capped, truncated = cap(cleaned, max_bytes=max_bytes)
-    summary, n = redact_text(result.summary)
+    summary, n_summary = redact_text(result.summary)
+    reason, n_reason = redact_text(result.coverage_reason)
+    error, n_error = redact_text(result.error) if result.error else (None, 0)
     return Evidence(
-        investigation_id=investigation_id,
+        investigation_id=call.investigation_id or None,
         environment_id=environment_id,
-        step_id=step_id,
-        call_id=call_id,
-        source=source,
+        step_id=call.step_id or None,
+        call_id=call.id,
+        source=call.capability_id,
         systems=systems,
         query=redact(query)[0],
         data=capped,
         sha256=full_hash,
         truncated=truncated,
         coverage=result.coverage,
-        coverage_reason=result.coverage_reason,
-        redactions=redactions + n,
-        error=result.error,
+        coverage_reason=reason,
+        redactions=redactions + n_summary + n_reason + n_error,
+        error=error,
         summary=summary,
     )

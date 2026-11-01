@@ -1,5 +1,6 @@
 """The built-in capabilities on the demo cluster: what they read and the coverage they state."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from k8sholmes.environments import connect
 from k8sholmes.store import Store
 from k8sholmes.testing import FakeCluster
 from k8sholmes.testing.demo import PLANTED_BEARER, PLANTED_TOKEN, build
+from tests.helpers import closed_port
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +38,6 @@ def run(world, capability: str, cluster: FakeCluster | None = None, **inputs):
         cluster=cluster or demo,
         store=store,
         user=user,
-        settings=records.CapabilitySettings(),
         investigation_id="inv_t",
     )
     call, evidence = registry.execute(capability, inputs, ctx, auth, step_id="stp_t")
@@ -228,27 +229,58 @@ def test_permissions_top_knowledge_and_recall(world) -> None:
     assert recall.coverage == "observed_absent"
 
 
-def test_probe_is_refused_until_enabled(world) -> None:
+def test_probe_is_refused_until_enabled_and_refuses_other_schemes(world) -> None:
     store, auth, env, user, demo, registry = world
-    ctx = Context(
-        environment=env, cluster=demo, store=store, user=user, settings=records.CapabilitySettings()
-    )
-    call, evidence = registry.execute("http.probe_url", {"url": "http://127.0.0.1:9/"}, ctx, auth)
+    port = closed_port()
+    ctx = Context(environment=env, cluster=demo, store=store, user=user)
+    call, evidence = registry.execute("http.probe_url", {"url": f"http://127.0.0.1:{port}/"}, ctx, auth)
     assert call.status == "refused"
     assert "probes are not enabled" in call.reason
     enabled = env.model_copy(update={"settings": env.settings.model_copy(update={"probes_enabled": True})})
-    ctx = Context(
-        environment=enabled, cluster=demo, store=store, user=user, settings=records.CapabilitySettings()
-    )
+    ctx = Context(environment=enabled, cluster=demo, store=store, user=user)
     call, evidence = registry.execute(
-        "http.probe_url", {"url": "http://127.0.0.1:9/", "timeout_ms": 300}, ctx, auth
+        "http.probe_url", {"url": f"http://127.0.0.1:{port}/", "timeout_ms": 300}, ctx, auth
     )
     assert call.status == "completed"
     assert evidence is not None
-    assert evidence.error is not None  # nothing listens on port 9
-    bad, _ = registry.execute("http.probe_url", {"url": "file:///etc/passwd"}, ctx, auth)
-    assert bad.status == "completed"
-    assert bad.evidence_id is not None
+    assert evidence.error is not None  # nothing listens there
+    assert evidence.coverage == "observed"
+    _, ev = registry.execute("http.probe_url", {"url": "file:///etc/passwd"}, ctx, auth)
+    assert ev is not None
+    assert ev.coverage == "cannot_answer"
+    assert ev.data is None
+    assert "only http and https" in ev.coverage_reason
+    assert "root:" not in json.dumps(ev.model_dump(mode="json"))
+
+
+def test_workload_health_and_recall_coverage(world) -> None:
+    missing = run(world, "k8s.workload_health", kind="deployment", name="ghost", namespace="shop")
+    assert missing.coverage == "observed_absent"
+    store, _, env, *_ = world
+    ev = records.Evidence(
+        investigation_id="inv_other",
+        environment_id=env.id,
+        source="k8s.safeguards",
+        coverage="observed",
+        summary="earlier",
+    )
+    store.put(ev)
+    store.put(
+        records.Finding(
+            investigation_id="inv_other",
+            environment_id=env.id,
+            title="t",
+            explanation="e",
+            condition="replicas.single",
+            resources=[records.ResourceRef(kind="Deployment", namespace="shop", name="scheduler")],
+            evidence_for=[ev.id],
+            author="model:m",
+        )
+    )
+    recalled = run(world, "evidence.recall", namespace="shop", name="scheduler")
+    assert recalled.coverage == "observed"
+    assert recalled.data["findings"][0]["condition"] == "replicas.single"
+    assert [e["id"] for e in recalled.data["evidence"]] == [ev.id]
 
 
 def test_demo_after_fix_is_healthy(tmp_path: Path) -> None:
@@ -260,7 +292,10 @@ def test_demo_after_fix_is_healthy(tmp_path: Path) -> None:
     user = auth.create_user("u", "a strong one", is_admin=True)
     registry = builtin_registry(extensions=False)
     ctx = Context(
-        environment=env, cluster=cluster, store=store, user=user, settings=records.CapabilitySettings()
+        environment=env,
+        cluster=cluster,
+        store=store,
+        user=user,
     )
     _, ev = registry.execute(
         "k8s.workload_health", {"kind": "deployment", "name": "api", "namespace": "shop"}, ctx, auth

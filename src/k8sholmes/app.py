@@ -7,21 +7,20 @@ fake cluster and a scripted model. The demo environment (design §17.2) is creat
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from k8sholmes.auth import Auth
 from k8sholmes.capabilities import Registry
 from k8sholmes.capabilities.builtin import builtin_registry
-from k8sholmes.cluster import Cluster
+from k8sholmes.cluster import Cluster, Kubectl
 from k8sholmes.engine import Engine
-from k8sholmes.environments import cluster_for, connect, create_environment
+from k8sholmes.environments import connect, create_environment
 from k8sholmes.errors import InvalidInput, NotFound
 from k8sholmes.models import Model, OpenAICompatible, api_key_for, usable_for_investigations
-from k8sholmes.records import Environment, Grant, Investigation, ModelEndpoint, User
+from k8sholmes.records import Environment, Investigation, ModelEndpoint, User
 from k8sholmes.store import Store
-from k8sholmes.testing.cluster import FakeCluster
+from k8sholmes.testing.cluster import RecordedCluster
 from k8sholmes.testing.demo import build as build_demo
 from k8sholmes.testing.demo_model import DemoModel
 
@@ -60,9 +59,12 @@ class App:
     # environments and models
 
     def cluster_for(self, environment: Environment) -> Cluster:
+        """The adapter for an environment: an in-memory one (tests), the recording it names, or kubectl."""
         if environment.id in self.clusters:
             return self.clusters[environment.id]
-        return cluster_for(environment)
+        if environment.recording:
+            return RecordedCluster(environment.recording)
+        return Kubectl(environment.context, kubeconfig=environment.kubeconfig)
 
     def model_for(self, investigation: Investigation) -> Model:
         endpoint_id = investigation.model_endpoint_id
@@ -103,7 +105,7 @@ class App:
     # the demo
 
     def setup_demo(self, *, after_fix: bool = False) -> tuple[Environment, User]:
-        """The demo environment with its recording, the demo model endpoint and a demo admin (§17.2)."""
+        """The demo environment with its recording, the demo model endpoint and a demo operator (§17.2)."""
         recording = self.home / "recordings" / DEMO_ENVIRONMENT
         build_demo(after_fix=after_fix).save(recording)
         existing = self.store.find(Environment, {"name": DEMO_ENVIRONMENT})
@@ -118,7 +120,7 @@ class App:
             update={"settings": env.settings.model_copy(update={"default_model_id": DEMO_ENDPOINT_ID})}
         )
         self.store.put(env)
-        env = connect(self.store, env)
+        env = connect(self.store, env, self.cluster_for(env))
         try:
             self.store.get(ModelEndpoint, DEMO_ENDPOINT_ID)
         except NotFound:
@@ -132,13 +134,10 @@ class App:
                 )
             )
         users = self.store.find(User, {"username": "demo"})
-        user = users[0] if users else self.auth.create_user("demo", "demo-password", is_admin=True)
+        user = users[0] if users else self.auth.create_user("demo", "demo-password")
         if not any(g.environment_id == env.id for g in user.grants):
             user = self.auth.set_grant(user, env.id, "operator")
         return env, user
-
-    def demo_cluster(self, *, after_fix: bool = False) -> FakeCluster:
-        return build_demo(after_fix=after_fix)
 
 
 def _allowed_executables(home: Path) -> list[str]:
@@ -157,4 +156,4 @@ def grant_role(app: App, username: str, environment: Environment, role: str) -> 
     return app.auth.set_grant(users[0], environment.id, role)  # type: ignore[arg-type]
 
 
-__all__ = ["DEMO_ENDPOINT_ID", "App", "Callable", "Grant", "grant_role"]
+__all__ = ["DEMO_ENDPOINT_ID", "App", "grant_role"]

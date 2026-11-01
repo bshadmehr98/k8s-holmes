@@ -31,7 +31,7 @@ INVENTORY_KINDS: tuple[str, ...] = (
 WORKLOAD_KINDS: frozenset[str] = frozenset({"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"})
 
 
-def get(obj: Any, *path: str, default: Any = None) -> Any:
+def dig(obj: Any, *path: str, default: Any = None) -> Any:
     value: Any = obj
     for part in path:
         if not isinstance(value, dict):
@@ -85,11 +85,11 @@ def _pod_template(resource: dict[str, Any]) -> dict[str, Any]:
     kind = resource.get("kind")
     if kind == "CronJob":
         return cast(
-            dict[str, Any], get(resource, "spec", "jobTemplate", "spec", "template", "spec", default={})
+            dict[str, Any], dig(resource, "spec", "jobTemplate", "spec", "template", "spec", default={})
         )
     if kind == "Pod":
         return cast(dict[str, Any], resource.get("spec", {}) or {})
-    return cast(dict[str, Any], get(resource, "spec", "template", "spec", default={}))
+    return cast(dict[str, Any], dig(resource, "spec", "template", "spec", default={}))
 
 
 def _pod_summary(resource: dict[str, Any]) -> dict[str, Any]:
@@ -100,18 +100,18 @@ def _pod_summary(resource: dict[str, Any]) -> dict[str, Any]:
     return {
         "phase": status.get("phase"),
         "ready": ready,
-        "node": get(resource, "spec", "nodeName"),
+        "node": dig(resource, "spec", "nodeName"),
         "restarts": sum(int(s.get("restartCount", 0) or 0) for s in statuses),
         "container_states": [
             {
                 "name": s.get("name"),
                 "ready": s.get("ready"),
                 "restarts": s.get("restartCount", 0),
-                "waiting": get(s, "state", "waiting", "reason"),
-                "waiting_message": get(s, "state", "waiting", "message"),
-                "last_terminated": get(s, "lastState", "terminated", "reason"),
-                "last_exit_code": get(s, "lastState", "terminated", "exitCode"),
-                "last_finished": get(s, "lastState", "terminated", "finishedAt"),
+                "waiting": dig(s, "state", "waiting", "reason"),
+                "waiting_message": dig(s, "state", "waiting", "message"),
+                "last_terminated": dig(s, "lastState", "terminated", "reason"),
+                "last_exit_code": dig(s, "lastState", "terminated", "exitCode"),
+                "last_finished": dig(s, "lastState", "terminated", "finishedAt"),
             }
             for s in statuses
         ],
@@ -119,10 +119,10 @@ def _pod_summary(resource: dict[str, Any]) -> dict[str, Any]:
             {"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason")} for c in conditions
         ],
         "containers": _containers(_pod_template(resource)),
-        "service_account": get(resource, "spec", "serviceAccountName"),
-        "automount_token": get(resource, "spec", "automountServiceAccountToken"),
+        "service_account": dig(resource, "spec", "serviceAccountName"),
+        "automount_token": dig(resource, "spec", "automountServiceAccountToken"),
         "volumes": resource.get("spec", {}).get("volumes", []) or [],
-        "deletion_timestamp": get(resource, "metadata", "deletionTimestamp"),
+        "deletion_timestamp": dig(resource, "metadata", "deletionTimestamp"),
     }
 
 
@@ -137,7 +137,7 @@ def _workload_summary(resource: dict[str, Any]) -> dict[str, Any]:
         "ready": status.get("readyReplicas", status.get("numberReady")),
         "available": status.get("availableReplicas", status.get("numberAvailable")),
         "updated": status.get("updatedReplicas"),
-        "generation": get(resource, "metadata", "generation"),
+        "generation": dig(resource, "metadata", "generation"),
         "observed_generation": status.get("observedGeneration"),
         "conditions": [
             {
@@ -148,11 +148,11 @@ def _workload_summary(resource: dict[str, Any]) -> dict[str, Any]:
             }
             for c in cast(list[dict[str, Any]], status.get("conditions", []) or [])
         ],
-        "selector": get(spec, "selector", "matchLabels", default={}),
-        "strategy": get(spec, "strategy", "type") or get(spec, "updateStrategy", "type"),
+        "selector": dig(spec, "selector", "matchLabels", default={}),
+        "strategy": dig(spec, "strategy", "type") or dig(spec, "updateStrategy", "type"),
         "containers": _containers(template),
-        "pod_labels": get(spec, "template", "metadata", "labels", default={}),
-        "anti_affinity": bool(get(template, "affinity", "podAntiAffinity")),
+        "pod_labels": dig(spec, "template", "metadata", "labels", default={}),
+        "anti_affinity": bool(dig(template, "affinity", "podAntiAffinity")),
         "service_account": template.get("serviceAccountName"),
         "automount_token": template.get("automountServiceAccountToken"),
         "volumes": template.get("volumes", []) or [],
@@ -162,8 +162,8 @@ def _workload_summary(resource: dict[str, Any]) -> dict[str, Any]:
         "completions": spec.get("completions"),
         "succeeded": status.get("succeeded"),
         "failed": status.get("failed"),
-        "revision": get(resource, "metadata", "annotations", "deployment.kubernetes.io/revision"),
-        "change_cause": get(resource, "metadata", "annotations", "kubernetes.io/change-cause"),
+        "revision": dig(resource, "metadata", "annotations", "deployment.kubernetes.io/revision"),
+        "change_cause": dig(resource, "metadata", "annotations", "kubernetes.io/change-cause"),
     }
 
 
@@ -183,46 +183,46 @@ def _service_summary(resource: dict[str, Any]) -> dict[str, Any]:
         ],
         "cluster_ip": spec.get("clusterIP"),
         "external_ips": spec.get("externalIPs", []) or [],
-        "load_balancer": get(resource, "status", "loadBalancer", "ingress", default=[]),
+        "load_balancer": dig(resource, "status", "loadBalancer", "ingress", default=[]),
     }
 
 
 def _ingress_summary(resource: dict[str, Any]) -> dict[str, Any]:
-    rules = cast(list[dict[str, Any]], get(resource, "spec", "rules", default=[]) or [])
+    rules = cast(list[dict[str, Any]], dig(resource, "spec", "rules", default=[]) or [])
     backends: list[dict[str, Any]] = []
     for rule in rules:
-        for path in cast(list[dict[str, Any]], get(rule, "http", "paths", default=[]) or []):
-            service = cast(dict[str, Any], get(path, "backend", "service", default={}) or {})
+        for path in cast(list[dict[str, Any]], dig(rule, "http", "paths", default=[]) or []):
+            service = cast(dict[str, Any], dig(path, "backend", "service", default={}) or {})
             backends.append(
                 {
                     "host": rule.get("host"),
                     "path": path.get("path"),
                     "service": service.get("name"),
-                    "port": get(service, "port", "number") or get(service, "port", "name"),
+                    "port": dig(service, "port", "number") or dig(service, "port", "name"),
                 }
             )
-    default = cast(dict[str, Any], get(resource, "spec", "defaultBackend", "service", default={}) or {})
+    default = cast(dict[str, Any], dig(resource, "spec", "defaultBackend", "service", default={}) or {})
     if default:
         backends.append(
             {
                 "host": None,
                 "path": None,
                 "service": default.get("name"),
-                "port": get(default, "port", "number"),
+                "port": dig(default, "port", "number"),
             }
         )
     return {
         "hosts": [r.get("host") for r in rules if r.get("host")],
         "backends": backends,
-        "tls": bool(get(resource, "spec", "tls")),
-        "class": get(resource, "spec", "ingressClassName"),
+        "tls": bool(dig(resource, "spec", "tls")),
+        "class": dig(resource, "spec", "ingressClassName"),
     }
 
 
 def _network_policy_summary(resource: dict[str, Any]) -> dict[str, Any]:
     spec = cast(dict[str, Any], resource.get("spec", {}) or {})
     return {
-        "pod_selector": get(spec, "podSelector", "matchLabels", default={}),
+        "pod_selector": dig(spec, "podSelector", "matchLabels", default={}),
         "selects_all": spec.get("podSelector", {}) == {} or spec.get("podSelector") == {"matchLabels": {}},
         "policy_types": spec.get("policyTypes", []) or [],
         "ingress_rules": len(spec.get("ingress", []) or []),
@@ -248,7 +248,7 @@ def _pvc_summary(resource: dict[str, Any]) -> dict[str, Any]:
     return {
         "phase": status.get("phase"),
         "storage_class": spec.get("storageClassName"),
-        "capacity": get(status, "capacity", "storage"),
+        "capacity": dig(status, "capacity", "storage"),
         "volume": spec.get("volumeName"),
     }
 
@@ -257,7 +257,7 @@ def _hpa_summary(resource: dict[str, Any]) -> dict[str, Any]:
     spec = cast(dict[str, Any], resource.get("spec", {}) or {})
     status = cast(dict[str, Any], resource.get("status", {}) or {})
     return {
-        "target": get(spec, "scaleTargetRef", default={}),
+        "target": dig(spec, "scaleTargetRef", default={}),
         "min": spec.get("minReplicas"),
         "max": spec.get("maxReplicas"),
         "current": status.get("currentReplicas"),
@@ -270,7 +270,7 @@ def _pdb_summary(resource: dict[str, Any]) -> dict[str, Any]:
     spec = cast(dict[str, Any], resource.get("spec", {}) or {})
     status = cast(dict[str, Any], resource.get("status", {}) or {})
     return {
-        "selector": get(spec, "selector", "matchLabels", default={}),
+        "selector": dig(spec, "selector", "matchLabels", default={}),
         "min_available": spec.get("minAvailable"),
         "max_unavailable": spec.get("maxUnavailable"),
         "disruptions_allowed": status.get("disruptionsAllowed"),
@@ -279,11 +279,11 @@ def _pdb_summary(resource: dict[str, Any]) -> dict[str, Any]:
 
 def _endpoint_slice_summary(resource: dict[str, Any]) -> dict[str, Any]:
     return {
-        "service": get(resource, "metadata", "labels", "kubernetes.io/service-name"),
+        "service": dig(resource, "metadata", "labels", "kubernetes.io/service-name"),
         "endpoints": [
             {
                 "target": e.get("targetRef", {}),
-                "ready": get(e, "conditions", "ready"),
+                "ready": dig(e, "conditions", "ready"),
                 "addresses": e.get("addresses", []),
             }
             for e in cast(list[dict[str, Any]], resource.get("endpoints", []) or [])

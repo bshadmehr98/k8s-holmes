@@ -18,6 +18,7 @@ def test_scenario_1_why_is_api_restarting(demo: Demo) -> None:
     assert "change.before-incident" in found
     assert found["change.before-incident"].kind == "hypothesis"
     assert inv.answer is not None and "256Mi" in inv.answer
+    assert inv.limitations == []  # everything it claims rests on observed evidence
 
 
 def test_scenario_2_unused_services_are_not_called_unused(demo: Demo) -> None:
@@ -40,7 +41,7 @@ def test_scenario_3_isolation_says_what_it_cannot_know(demo: Demo) -> None:
 
 
 def test_scenario_4_missing_alerts_then_an_accepted_exception(demo: Demo) -> None:
-    from k8sholmes import knowledge
+    from k8sholmes import knowledge, records
     from k8sholmes.records import ResourceRef
 
     inv = demo.ask("Which important alerts are missing?")
@@ -50,13 +51,18 @@ def test_scenario_4_missing_alerts_then_an_accepted_exception(demo: Demo) -> Non
     assert "web" not in without_alerts
     single = [f for f in found if f.condition == "replicas.single" and f.resources[0].name == "scheduler"]
     assert single and single[0].state == "open"
+    assert any(
+        "fired" in lim and "cannot_answer" in lim for lim in inv.limitations
+    )  # whether alerts fired is unknown
     knowledge.create_exception(
         demo.app.store,
-        environment_id=demo.env.id,
-        condition="replicas.single",
-        scope=ResourceRef(kind="Deployment", namespace="shop", name="scheduler"),
-        explanation="singleton scheduler; downtime is acceptable",
-        approved_by=f"user:{demo.user.id}",
+        records.AcceptedException(
+            environment_id=demo.env.id,
+            condition="replicas.single",
+            scope=ResourceRef(kind="Deployment", namespace="shop", name="scheduler"),
+            explanation="singleton scheduler; downtime is acceptable",
+            approved_by=f"user:{demo.user.id}",
+        ),
     )
     again = demo.ask("Which important alerts are missing?")
     found_again = demo.app.store.find(Finding, {"investigation_id": again.id})
@@ -76,6 +82,7 @@ def test_scenario_5_what_changed_before(demo: Demo) -> None:
     found = conditions(demo, inv)
     assert "change.before-incident" in found
     assert "256Mi" in found["change.before-incident"].explanation
+    assert inv.limitations == []
 
 
 def test_the_fix_is_visible_in_the_after_state(tmp_path) -> None:

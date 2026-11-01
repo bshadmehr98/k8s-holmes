@@ -8,13 +8,14 @@ import pytest
 from k8sholmes import records
 from k8sholmes.auth import Auth
 from k8sholmes.capabilities.builtin import builtin_registry
-from k8sholmes.engine import Engine, _json_object
+from k8sholmes.engine import Engine
 from k8sholmes.environments import connect
-from k8sholmes.errors import InvestigationStateError, ModelFailure
+from k8sholmes.errors import InvestigationStateError, ModelFailure, PermissionRefused
 from k8sholmes.store import Store
 from k8sholmes.testing import ScriptedModel
 from k8sholmes.testing.demo import PLANTED_INSTRUCTION, PLANTED_TOKEN, build
 from k8sholmes.testing.model import calls, structured, text
+from k8sholmes.thread import json_object
 
 FRAMING = structured(
     {
@@ -44,13 +45,16 @@ class World:
         )
         self.registry = builtin_registry(extensions=False)
         self.model = ScriptedModel()
+        self.slept: list[float] = []
+        self.clock_value = 0.0
         self.engine = Engine(
             self.store,
             self.auth,
             self.registry,
             cluster_for=lambda e: self.cluster,
             model_for=lambda inv: self.model,
-            sleep=lambda s: None,
+            sleep=self.slept.append,
+            clock=lambda: self.clock_value,
         )
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.engine.on_event = lambda kind, payload: self.events.append((kind, payload))
@@ -273,7 +277,7 @@ def test_an_instruction_in_a_log_changes_nothing(tmp_path: Path) -> None:
 
 def test_viewer_cannot_start_and_budgets_stop_the_loop(tmp_path: Path) -> None:
     world = World(tmp_path)
-    with pytest.raises(Exception, match="investigator role"):
+    with pytest.raises(PermissionRefused, match="investigator role"):
         world.engine.start(environment=world.env, question="x", user=world.viewer)
     world.model = ScriptedModel(
         script=lambda m, t, s: (
@@ -445,11 +449,13 @@ def test_accepted_exception_applies_exactly_in_the_next_investigation(tmp_path: 
 
     knowledge.create_exception(
         world.store,
-        environment_id=world.env.id,
-        condition="replicas.single",
-        scope=sched,
-        explanation="singleton scheduler; downtime acceptable",
-        approved_by=f"user:{world.user.id}",
+        records.AcceptedException(
+            environment_id=world.env.id,
+            condition="replicas.single",
+            scope=sched,
+            explanation="singleton scheduler; downtime acceptable",
+            approved_by=f"user:{world.user.id}",
+        ),
     )
     second = world.investigate("Which workloads run a single replica?", script=script)
     by_name = {f.resources[0].name: f for f in world.findings(second)}
@@ -474,12 +480,99 @@ def test_model_failures_retry_only_when_retryable(tmp_path: Path) -> None:
     inv = world.investigate(script=flaky)
     assert inv.status == "failed"
     assert any("the model failed" in lim for lim in inv.limitations)
-    statuses = [c.status for c in world.store.find(records.ModelCall, {"investigation_id": inv.id})]
-    assert statuses == ["retried", "failed"]
+    calls_made = world.store.find(records.ModelCall, {"investigation_id": inv.id})
+    assert [c.status for c in calls_made] == ["retried", "failed"]
+    assert len({(c.endpoint_id, c.model) for c in calls_made}) == 1  # retried on the same endpoint
+    assert world.slept == [1.0]
 
 
 def test_json_object_is_tolerant() -> None:
-    assert _json_object('```json\n{"a": 1}\n```') == {"a": 1}
-    assert _json_object('Sure! {"a": 1} there') == {"a": 1}
-    assert _json_object("nothing") == {}
-    assert _json_object("[1, 2]") == {}
+    assert json_object('```json\n{"a": 1}\n```') == {"a": 1}
+    assert json_object('Sure! {"a": 1} there') == {"a": 1}
+    assert json_object("nothing") == {}
+    assert json_object("[1, 2]") == {}
+
+
+def test_token_call_and_time_budgets(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    empty = structured(
+        {"answer": "", "findings": [], "limitations": [], "next_steps": [], "knowledge_used": []}
+    )
+
+    def two_calls(messages, tools, schema):
+        if schema and schema.get("title") == "framing":
+            return FRAMING
+        if schema:
+            return empty
+        return calls(("k8s.permissions", {}), ("k8s.top", {"kind": "pods"}))
+
+    world.model = ScriptedModel(script=two_calls)
+    inv = world.engine.start(
+        environment=world.env,
+        question="budgets",
+        user=world.user,
+        budgets=records.Budgets(calls_per_step=1, tokens=350),
+    )
+    inv = world.engine.run(inv.id, world.user)
+    assert any("token budget" in lim for lim in inv.limitations)
+    tool_messages = [
+        m for m in world.store.find(records.Message, {"investigation_id": inv.id}) if m.role == "tool"
+    ]
+    assert any("call budget was spent" in m.content for m in tool_messages)
+    made = {c.capability_id for c in world.store.find(records.Call, {"investigation_id": inv.id})}
+    assert "k8s.top" not in made  # the second call of the step was never run
+    world.model = ScriptedModel(script=two_calls)
+    inv = world.engine.start(
+        environment=world.env, question="time", user=world.user, budgets=records.Budgets(wall_ms=1)
+    )
+
+    def ticking(messages, tools, schema):
+        world.clock_value += 1.0
+        return two_calls(messages, tools, schema)
+
+    world.model = ScriptedModel(script=ticking)
+    inv = world.engine.run(inv.id, world.user)
+    assert any("time budget" in lim for lim in inv.limitations)
+
+
+def test_unexpected_errors_leave_running_and_a_dangling_tool_call_gets_a_reply(tmp_path: Path) -> None:
+    world = World(tmp_path)
+
+    class BrokenError(Exception):
+        pass
+
+    def script(messages, tools, schema):
+        if schema and schema.get("title") == "framing":
+            return FRAMING
+        raise BrokenError("the store exploded")
+
+    world.model = ScriptedModel(script=script)
+    inv = world.engine.start(environment=world.env, question="boom", user=world.user)
+    with pytest.raises(BrokenError):
+        world.engine.run(inv.id, world.user)
+    inv = world.store.get(records.Investigation, inv.id)
+    assert inv.status == "failed"
+    assert any("BrokenError" in lim for lim in inv.limitations)
+    assert all(s.status != "running" for s in world.store.find(records.Step, {"investigation_id": inv.id}))
+    # a tool call the process never answered gets a synthesized reply when the thread is replayed
+    from k8sholmes import thread
+
+    world.engine._append(
+        inv,
+        "assistant",
+        "",
+        author="model:x",
+        tool_calls=[records.ToolCall(id="call_9", name="k8s.top", arguments={})],
+    )
+    replayed = thread.messages_for(world.store, inv, world.env, [], [])
+    assert any(m.get("tool_call_id") == "call_9" and "interrupted" in m["content"] for m in replayed)
+
+
+def test_a_non_json_framing_is_a_limitation_and_a_non_json_conclusion_is_partial(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.model = ScriptedModel(script=lambda m, t, s: text("I would rather chat.") if s else text("done"))
+    inv = world.engine.start(environment=world.env, question="prose", user=world.user)
+    inv = world.engine.run(inv.id, world.user)
+    assert inv.status == "partial"
+    assert any("framing was not the JSON" in lim for lim in inv.limitations)
+    assert any("not the JSON object" in lim for lim in inv.limitations)

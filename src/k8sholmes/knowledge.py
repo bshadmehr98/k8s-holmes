@@ -76,44 +76,20 @@ def matching_exception(
     return None, note
 
 
-def create_exception(
-    store: Store,
-    *,
-    environment_id: str,
-    condition: str,
-    scope: ResourceRef,
-    explanation: str,
-    approved_by: str,
-    applies_to: str = "resource",
-    review_at: datetime | None = None,
-    expires_at: datetime | None = None,
-    reconsider_when: str = "",
-    triggers: list[str] | None = None,
-    snapshot: dict[str, object] | None = None,
-    finding_id: str | None = None,
-) -> AcceptedException:
-    if not explanation.strip():
+def create_exception(store: Store, exc: AcceptedException) -> AcceptedException:
+    """Store an exception after the two checks the record itself cannot make (design §9.1)."""
+    if not exc.explanation.strip():
         raise InvalidInput("an exception needs an explanation: why is this intentional?")
-    if applies_to == "resource" and not scope.name:
+    if exc.applies_to == "resource" and not exc.scope.name:
         raise InvalidInput(
             "an exception on a resource needs its name; choose applies_to=namespace for a whole namespace"
         )
-    exc = AcceptedException(
-        environment_id=environment_id,
-        condition=condition,
-        scope=scope,
-        applies_to=applies_to,  # type: ignore[arg-type]
-        explanation=explanation.strip(),
-        approved_by=approved_by,
-        review_at=review_at,
-        expires_at=expires_at,
-        reconsider_when=reconsider_when,
-        triggers=list(triggers or []),  # type: ignore[arg-type]
-        snapshot=dict(snapshot or {}),
-        finding_id=finding_id,
-    )
+    exc = exc.model_copy(update={"explanation": exc.explanation.strip()})
     store.put(exc)
     return exc
+
+
+EXCEPTION_EDITABLE = {"explanation", "review_at", "expires_at", "reconsider_when", "triggers", "applies_to"}
 
 
 def revise_exception(
@@ -122,6 +98,9 @@ def revise_exception(
     """Edit an exception; every edit is a revision (design §9.1)."""
     if exc.revoked_at is not None:
         raise InvestigationStateError("a revoked exception is history; create a new one instead")
+    bad = set(updates) - EXCEPTION_EDITABLE
+    if bad:
+        raise InvalidInput(f"these fields of an exception are not edited: {', '.join(sorted(bad))}")
     before = {k: getattr(exc, k) for k in updates}
     revision = Revision(
         at=now(), author=author, change=change, before={k: _plain(v) for k, v in before.items()}

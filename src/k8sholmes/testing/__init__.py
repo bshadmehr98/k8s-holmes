@@ -7,13 +7,14 @@ from k8sholmes.testing.cluster import (
     matches_fields,
     matches_selector,
 )
-from k8sholmes.testing.model import ScriptedModel
+from k8sholmes.testing.model import ScriptedModel, check_model
 
 __all__ = [
     "FakeCluster",
     "RecordedCluster",
     "ScriptedModel",
     "check_cluster",
+    "check_model",
     "matches_fields",
     "matches_selector",
 ]

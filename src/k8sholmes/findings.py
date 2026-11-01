@@ -24,12 +24,13 @@ from k8sholmes.store import Store
 
 CONDITION = re.compile(r"^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)+$")
 NUMBER = re.compile(r"(?<![\w.-])\d+(?:\.\d+)?%?(?![\w.-])")
-# claims that need a source the cluster is not (design §7.2); the words that make them
-UNSUPPORTED_CLAIMS: dict[str, tuple[str, ...]] = {
-    "unused": ("traffic",),
-    "isolated from": ("outside",),
-    "no alert fired": ("fired",),
-    "the trace shows": ("trace",),
+# claims that need a source the cluster is not (design §7.2): the words that make them, and the word a
+# supporting observed source's id or reason must carry
+UNSUPPORTED_CLAIMS: dict[str, str] = {
+    "unused": "traffic",
+    "isolated from": "outside",
+    "no alert fired": "fired",
+    "the trace shows": "trace",
 }
 TRANSITIONS: dict[FindingState, set[FindingState]] = {
     "open": {"acknowledged", "accepted_risk", "fixed"},
@@ -37,6 +38,17 @@ TRANSITIONS: dict[FindingState, set[FindingState]] = {
     "accepted_risk": {"open"},
     "fixed": {"verified", "open"},
     "verified": {"open"},
+}
+EDITABLE = {
+    "title",
+    "explanation",
+    "kind",
+    "uncertainty",
+    "missing_information",
+    "next_steps",
+    "owner",
+    "evidence_for",
+    "evidence_against",
 }
 
 
@@ -63,21 +75,17 @@ def _evidence_text(ids: list[str], evidence: dict[str, Evidence]) -> str:
     for ev_id in ids:
         ev = evidence.get(ev_id)
         if ev is not None:
-            parts.append(ev.summary)
-            parts.append(json.dumps(ev.data, default=str))
-            parts.append(json.dumps(ev.query, default=str))
+            parts += [ev.summary, json.dumps(ev.data, default=str), json.dumps(ev.query, default=str)]
     return "\n".join(parts)
 
 
 def _numbers_without_evidence(text: str, evidence_text: str, resources: list[ResourceRef]) -> list[str]:
     names = " ".join(r.name for r in resources)
-    missing: list[str] = []
-    for number in NUMBER.findall(text):
-        plain = number.rstrip("%")
-        if plain in evidence_text or number in evidence_text or plain in names:
-            continue
-        missing.append(number)
-    return missing
+    return [
+        n
+        for n in NUMBER.findall(text)
+        if n.rstrip("%") not in evidence_text and n not in evidence_text and n.rstrip("%") not in names
+    ]
 
 
 def validate_conclusion(
@@ -93,88 +101,87 @@ def validate_conclusion(
         limitations=[str(x) for x in cast(list[Any], payload.get("limitations") or [])],
         next_steps=[str(x) for x in cast(list[Any], payload.get("next_steps") or [])],
     )
+    if not payload:
+        result.problems.append("the reply was not the JSON object the schema asks for")
+        return result
     for k_id in cast(list[Any], payload.get("knowledge_used") or []):
         if str(k_id) in knowledge_ids:
             result.knowledge_used.append(str(k_id))
         else:
             result.problems.append(f"knowledge_used names {k_id!r}, which was not in the context")
     for n, raw in enumerate(cast(list[dict[str, Any]], payload.get("findings") or []), start=1):
-        _validate_finding(n, raw, evidence, result)
+        label = f"finding {n} ({str(raw.get('title') or '')[:40]!r})"
+        problem = _refusal_for(label, raw, evidence)
+        if problem:
+            result.problems.append(problem)
+            continue
+        data = _finding_data(raw)
+        limitation = _limitation_for(data, [evidence[x] for x in data["evidence_for"]])
+        if limitation:
+            result.limitations.append(limitation)
+        else:
+            result.findings.append(data)
     return result
 
 
-def _validate_finding(n: int, raw: dict[str, Any], evidence: dict[str, Evidence], result: Validated) -> None:
-    label = f"finding {n} ({str(raw.get('title') or '')[:40]!r})"
-    kind = str(raw.get("kind") or "observation")
-    if kind not in ("observation", "hypothesis"):
-        result.problems.append(
-            f"{label}: kind must be observation or hypothesis; only a person marks a conclusion"
-        )
-        kind = "hypothesis"
+def _refusal_for(label: str, raw: dict[str, Any], evidence: dict[str, Evidence]) -> str | None:
+    """Why a finding goes back for repair: the wrong kind, unknown or missing evidence, invented numbers."""
+    if str(raw.get("kind") or "observation") not in ("observation", "hypothesis"):
+        return f"{label}: kind must be observation or hypothesis; only a person marks a conclusion"
     for_ids = [str(x) for x in cast(list[Any], raw.get("evidence_for") or [])]
     against_ids = [str(x) for x in cast(list[Any], raw.get("evidence_against") or [])]
     unknown = [x for x in for_ids + against_ids if x not in evidence]
     if unknown:
-        result.problems.append(f"{label}: cites evidence that does not exist: {', '.join(unknown)}")
-        return
+        return f"{label}: cites evidence that does not exist: {', '.join(unknown)}"
     if not for_ids:
-        result.problems.append(
-            f"{label}: has no supporting evidence; cite evidence ids or state it as a limitation"
+        return f"{label}: has no supporting evidence; cite evidence ids or state it as a limitation"
+    title, explanation = str(raw.get("title") or "").strip(), str(raw.get("explanation") or "").strip()
+    if not title or not explanation:
+        return f"{label}: needs a title and an explanation"
+    resources = _resources(cast(list[dict[str, Any]], raw.get("resources") or []))
+    missing = _numbers_without_evidence(
+        f"{title} {explanation}", _evidence_text(for_ids + against_ids, evidence), resources
+    )
+    if missing:
+        return f"{label}: uses numbers that appear in no cited evidence: {', '.join(missing)}"
+    return None
+
+
+def _limitation_for(data: dict[str, Any], cited: list[Evidence]) -> str | None:
+    """Why a finding becomes a limitation: the coverage of its evidence cannot support the claim (§7.2)."""
+    title = str(data["title"])
+    if all(ev.coverage in ("no_data", "cannot_answer") for ev in cited):
+        kinds = ", ".join(sorted({ev.coverage for ev in cited}))
+        return f"{title}: the cited evidence cannot support it ({kinds}); kept as a limitation"
+    text = f"{title} {data['explanation']}".lower()
+    for claim, needed in UNSUPPORTED_CLAIMS.items():
+        supported = any(
+            ev.coverage == "observed" and needed in (ev.coverage_reason + ev.source).lower() for ev in cited
         )
-        return
+        if claim in text and not supported:
+            return f"{title}: says {claim!r}, which no connected source can establish; kept as a limitation"
+    return None
+
+
+def _finding_data(raw: dict[str, Any]) -> dict[str, Any]:
     condition = str(raw.get("condition") or "").strip().lower()
     if not CONDITION.match(condition):
         slug = re.sub(r"[^a-z0-9]+", "-", condition or str(raw.get("title") or "finding").lower()).strip("-")[
             :40
         ]
         condition = f"custom.{slug or 'finding'}"
-    resources = _resources(cast(list[dict[str, Any]], raw.get("resources") or []))
-    title, explanation = str(raw.get("title") or "").strip(), str(raw.get("explanation") or "").strip()
-    if not title or not explanation:
-        result.problems.append(f"{label}: needs a title and an explanation")
-        return
-    cited = [evidence[x] for x in for_ids]
-    if all(ev.coverage in ("no_data", "cannot_answer") for ev in cited):
-        result.limitations.append(
-            f"{title}: the cited evidence cannot support it "
-            f"({', '.join(sorted({ev.coverage for ev in cited}))}); kept as a limitation"
-        )
-        return
-    text = f"{title} {explanation}".lower()
-    for claim, needed in UNSUPPORTED_CLAIMS.items():
-        if claim in text and not any(
-            any(
-                word in (ev.coverage_reason + ev.source).lower() and ev.coverage == "observed"
-                for word in needed
-            )
-            for ev in cited
-        ):
-            result.limitations.append(
-                f"{title}: says {claim!r}, which no connected source can establish; kept as a limitation"
-            )
-            return
-    missing_numbers = _numbers_without_evidence(
-        f"{title} {explanation}", _evidence_text(for_ids + against_ids, evidence), resources
-    )
-    if missing_numbers:
-        result.problems.append(
-            f"{label}: uses numbers that appear in no cited evidence: {', '.join(missing_numbers)}"
-        )
-        return
-    result.findings.append(
-        {
-            "title": title,
-            "explanation": explanation,
-            "kind": kind,
-            "condition": condition,
-            "resources": resources,
-            "evidence_for": for_ids,
-            "evidence_against": against_ids,
-            "uncertainty": str(raw.get("uncertainty") or ""),
-            "missing_information": [str(x) for x in cast(list[Any], raw.get("missing_information") or [])],
-            "next_steps": [str(x) for x in cast(list[Any], raw.get("next_steps") or [])],
-        }
-    )
+    return {
+        "title": str(raw.get("title") or "").strip(),
+        "explanation": str(raw.get("explanation") or "").strip(),
+        "kind": str(raw.get("kind") or "observation"),
+        "condition": condition,
+        "resources": _resources(cast(list[dict[str, Any]], raw.get("resources") or [])),
+        "evidence_for": [str(x) for x in cast(list[Any], raw.get("evidence_for") or [])],
+        "evidence_against": [str(x) for x in cast(list[Any], raw.get("evidence_against") or [])],
+        "uncertainty": str(raw.get("uncertainty") or ""),
+        "missing_information": [str(x) for x in cast(list[Any], raw.get("missing_information") or [])],
+        "next_steps": [str(x) for x in cast(list[Any], raw.get("next_steps") or [])],
+    }
 
 
 def store_findings(
@@ -201,31 +208,7 @@ def store_findings(
         )
         key = candidate.key()
         if key in by_key:
-            earlier = by_key[key]
-            merged_for = sorted(set(earlier.evidence_for) | set(candidate.evidence_for))
-            merged_against = sorted(set(earlier.evidence_against) | set(candidate.evidence_against))
-            if (merged_for, merged_against, candidate.explanation) != (
-                earlier.evidence_for,
-                earlier.evidence_against,
-                earlier.explanation,
-            ):
-                revision = Revision(
-                    at=now(),
-                    author=author,
-                    change="revised in a later round",
-                    before={"explanation": earlier.explanation, "evidence_for": earlier.evidence_for},
-                )
-                candidate = earlier.model_copy(
-                    update={
-                        "explanation": candidate.explanation,
-                        "evidence_for": merged_for,
-                        "evidence_against": merged_against,
-                        "updated_at": now(),
-                        "revisions": [*earlier.revisions, revision],
-                    }
-                )
-            else:
-                candidate = earlier
+            candidate = _merge(by_key[key], candidate, author)
         else:
             exc, note = knowledge.matching_exception(candidate, exceptions)
             if exc is not None:
@@ -238,15 +221,38 @@ def store_findings(
     return stored
 
 
-def set_state(store: Store, finding: Finding, state: FindingState, *, author: str, note: str = "") -> Finding:
-    if state not in TRANSITIONS[finding.state]:
-        raise InvestigationStateError(f"a finding cannot go from {finding.state} to {state}")
+def _merge(earlier: Finding, candidate: Finding, author: str) -> Finding:
+    """A later round's version of the same finding: merged evidence, the earlier text kept as a revision."""
+    merged_for = sorted(set(earlier.evidence_for) | set(candidate.evidence_for))
+    merged_against = sorted(set(earlier.evidence_against) | set(candidate.evidence_against))
+    if (merged_for, merged_against, candidate.explanation) == (
+        earlier.evidence_for,
+        earlier.evidence_against,
+        earlier.explanation,
+    ):
+        return earlier
     revision = Revision(
         at=now(),
         author=author,
-        change=f"state {finding.state} -> {state}" + (f": {note}" if note else ""),
-        before={"state": finding.state},
+        change="revised in a later round",
+        before={"explanation": earlier.explanation, "evidence_for": earlier.evidence_for},
     )
+    return earlier.model_copy(
+        update={
+            "explanation": candidate.explanation,
+            "evidence_for": merged_for,
+            "evidence_against": merged_against,
+            "updated_at": now(),
+            "revisions": [*earlier.revisions, revision],
+        }
+    )
+
+
+def set_state(store: Store, finding: Finding, state: FindingState, *, author: str, note: str = "") -> Finding:
+    if state not in TRANSITIONS[finding.state]:
+        raise InvestigationStateError(f"a finding cannot go from {finding.state} to {state}")
+    change = f"state {finding.state} -> {state}" + (f": {note}" if note else "")
+    revision = Revision(at=now(), author=author, change=change, before={"state": finding.state})
     updated = finding.model_copy(
         update={"state": state, "updated_at": now(), "revisions": [*finding.revisions, revision]}
     )
@@ -256,29 +262,21 @@ def set_state(store: Store, finding: Finding, state: FindingState, *, author: st
 
 def revise(store: Store, finding: Finding, *, author: str, change: str, **updates: Any) -> Finding:
     """A user's correction or addition: the earlier text stays in the revision (design §8.4)."""
-    allowed = {
-        "title",
-        "explanation",
-        "kind",
-        "uncertainty",
-        "missing_information",
-        "next_steps",
-        "owner",
-        "evidence_for",
-        "evidence_against",
-    }
-    bad = set(updates) - allowed
+    bad = set(updates) - EDITABLE
     if bad:
         raise InvestigationStateError(f"these fields are not edited by hand: {', '.join(sorted(bad))}")
-    before = {k: getattr(finding, k) for k in updates}
-    revision = Revision(
-        at=now(),
-        author=author,
-        change=change,
-        before={k: (v.model_dump() if hasattr(v, "model_dump") else v) for k, v in before.items()},
-    )
+    before = {k: _plain(getattr(finding, k)) for k in updates}
+    revision = Revision(at=now(), author=author, change=change, before=before)
     updated = finding.model_copy(
         update={**updates, "updated_at": now(), "revisions": [*finding.revisions, revision]}
     )
     store.put(updated)
     return updated
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_plain(v) for v in cast(list[Any], value)]
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value

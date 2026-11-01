@@ -7,24 +7,39 @@ source could have shown it and `no_data` when it could not (events expire, a log
 
 from __future__ import annotations
 
-from datetime import timedelta
+import functools
+from datetime import datetime, timedelta
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-from k8sholmes.capabilities import Capability, Context
+from k8sholmes.capabilities import Capability, Context, Inputs
 from k8sholmes.cluster import canonical_kind
 from k8sholmes.environments import take_inventory
 from k8sholmes.errors import NotFound
 from k8sholmes.evidence import Result
-from k8sholmes.inventory import WORKLOAD_KINDS, get, item_of, parse_time
+from k8sholmes.inventory import WORKLOAD_KINDS, InventoryItem, dig, item_of, parse_time
 from k8sholmes.records import ResourceRef, now
 
 K8S = ("kubernetes",)
+INSPECT = functools.partial(Capability, class_="inspect", systems=K8S)
+EVENTS_NOTE = (
+    "the cluster keeps events for about an hour by default, so an empty answer for a longer period does "
+    "not mean nothing happened"
+)
 
 
-class Inputs(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+def _item_dump(item: InventoryItem) -> dict[str, Any]:
+    return {
+        "ref": item.ref.model_dump(),
+        "labels": item.labels,
+        "owner": item.owner.model_dump() if item.owner else None,
+        "summary": item.summary,
+    }
+
+
+def _selector_text(selector: dict[str, str]) -> str:
+    return ",".join(f"{k}={v}" for k, v in selector.items())
 
 
 # k8s.inventory
@@ -49,24 +64,13 @@ def run_inventory(inputs: BaseModel, ctx: Context) -> Result:
         "taken_at": inventory.taken_at.isoformat(),
         "namespaces": inventory.namespaces,
         "counts": counts,
-        "items": [
-            {
-                "ref": item.ref.model_dump(),
-                "labels": item.labels,
-                "owner": item.owner.model_dump() if item.owner else None,
-                "summary": item.summary,
-            }
-            for item in inventory.items
-        ],
+        "items": [_item_dump(item) for item in inventory.items],
         "relationships": [r.model_dump() for r in inventory.relationships],
         "unreadable": inventory.unreadable,
         "truncated": inventory.truncated,
     }
-    reason = (
-        "every kind listed"
-        if not inventory.unreadable
-        else "unreadable: " + ", ".join(f"{k} ({v})" for k, v in inventory.unreadable.items())
-    )
+    unreadable = ", ".join(f"{k} ({v})" for k, v in inventory.unreadable.items())
+    reason = "every kind listed" if not unreadable else f"unreadable: {unreadable}"
     summary = (
         f"{len(inventory.items)} resources, {len(counts)} kinds, {len(inventory.relationships)} relationships"
     )
@@ -98,12 +102,7 @@ def run_get(inputs: BaseModel, ctx: Context) -> Result:
             coverage_reason="the cluster has no such resource",
         )
     item = item_of(resource)
-    data = {
-        "resource": resource,
-        "summary": item.summary,
-        "labels": item.labels,
-        "owner": item.owner.model_dump() if item.owner else None,
-    }
+    data = {"resource": resource, **_item_dump(item)}
     return Result(
         summary=f"{item.ref.kind} {item.ref.namespace or ''}/{item.ref.name}", data=data, coverage="observed"
     )
@@ -124,11 +123,7 @@ def run_list(inputs: BaseModel, ctx: Context) -> Result:
         i.kind, namespace=i.namespace, selector=i.selector, field_selector=i.field_selector
     )
     truncated = len(resources) > ctx.settings.max_items
-    resources = resources[: ctx.settings.max_items]
-    items = [
-        {"ref": item_of(r).ref.model_dump(), "labels": item_of(r).labels, "summary": item_of(r).summary}
-        for r in resources
-    ]
+    items = [_item_dump(item_of(r)) for r in resources[: ctx.settings.max_items]]
     kind = canonical_kind(i.kind)
     if not items:
         return Result(
@@ -157,43 +152,41 @@ class EventsInputs(Inputs):
 
 def _event_row(e: dict[str, Any]) -> dict[str, Any]:
     return {
-        "time": e.get("lastTimestamp") or e.get("eventTime") or get(e, "metadata", "creationTimestamp"),
+        "time": e.get("lastTimestamp") or e.get("eventTime") or dig(e, "metadata", "creationTimestamp"),
         "first": e.get("firstTimestamp"),
         "type": e.get("type"),
         "reason": e.get("reason"),
-        "object": f"{get(e, 'involvedObject', 'kind')}/{get(e, 'involvedObject', 'name')}",
-        "namespace": get(e, "involvedObject", "namespace") or get(e, "metadata", "namespace"),
+        "object": f"{dig(e, 'involvedObject', 'kind')}/{dig(e, 'involvedObject', 'name')}",
+        "namespace": dig(e, "involvedObject", "namespace") or dig(e, "metadata", "namespace"),
         "message": e.get("message"),
-        "count": e.get("count") or get(e, "series", "count") or 1,
+        "count": e.get("count") or dig(e, "series", "count") or 1,
     }
+
+
+def _since(rows: list[dict[str, Any]], start: datetime) -> list[dict[str, Any]]:
+    return [r for r in rows if (t := parse_time(r["time"])) is not None and t >= start]
 
 
 def run_events(inputs: BaseModel, ctx: Context) -> Result:
     i = cast(EventsInputs, inputs)
     involved = ResourceRef(kind=i.kind, namespace=i.namespace, name=i.name) if i.kind and i.name else None
-    events = ctx.cluster.events(namespace=i.namespace, involved=involved)
-    start = (ctx.now or now()) - timedelta(hours=i.since_hours)
-    rows = [_event_row(e) for e in events]
-    recent = [r for r in rows if (t := parse_time(r["time"])) is not None and t >= start]
+    start = now() - timedelta(hours=i.since_hours)
+    recent = _since(
+        [_event_row(e) for e in ctx.cluster.events(namespace=i.namespace, involved=involved)], start
+    )
     recent = recent[-ctx.settings.max_items :]
+    data = {"events": recent, "period_start": start.isoformat()}
     if not recent:
         coverage = "observed_absent" if i.since_hours <= 1 else "no_data"
-        reason = (
-            "no events in the period; the cluster keeps events for about an hour by default, so an empty "
-            "answer for a longer period does not mean nothing happened"
-        )
         return Result(
             summary="no events in the period",
-            data={"events": [], "period_start": start.isoformat()},
+            data=data,
             coverage=coverage,
-            coverage_reason=reason,
+            coverage_reason=f"no events in the period; {EVENTS_NOTE}",
         )
     warnings = sum(1 for r in recent if r["type"] == "Warning")
-    return Result(
-        summary=f"{len(recent)} events, {warnings} warnings, since {start.isoformat(timespec='minutes')}",
-        data={"events": recent, "period_start": start.isoformat()},
-        coverage="observed",
-    )
+    summary = f"{len(recent)} events, {warnings} warnings, since {start.isoformat(timespec='minutes')}"
+    return Result(summary=summary, data=data, coverage="observed")
 
 
 # k8s.logs
@@ -212,7 +205,7 @@ class LogsInputs(Inputs):
 
 def run_logs(inputs: BaseModel, ctx: Context) -> Result:
     i = cast(LogsInputs, inputs)
-    since = (ctx.now or now()) - timedelta(hours=i.since_hours) if i.since_hours else None
+    since = now() - timedelta(hours=i.since_hours) if i.since_hours else None
     text = ctx.cluster.logs(
         i.pod, namespace=i.namespace, container=i.container, previous=i.previous, tail=i.tail, since=since
     )
@@ -224,9 +217,9 @@ def run_logs(inputs: BaseModel, ctx: Context) -> Result:
             coverage="no_data",
             coverage_reason="the log is empty or rotated away",
         )
-    lines = text.count("\n")
+    container = f"/{i.container}" if i.container else ""
     return Result(
-        summary=f"{lines} {which} log lines of {i.pod}" + (f"/{i.container}" if i.container else ""),
+        summary=f"{text.count(chr(10))} {which} log lines of {i.pod}{container}",
         data=text,
         coverage="observed",
     )
@@ -242,14 +235,51 @@ class WorkloadInputs(Inputs):
 
 
 def _unhealthy(pod_summary: dict[str, Any]) -> bool:
+    states = cast(list[dict[str, Any]], pod_summary.get("container_states") or [])
     return (
         pod_summary.get("phase") not in ("Running", "Succeeded")
         or not pod_summary.get("ready")
         or int(pod_summary.get("restarts") or 0) > 0
-        or any(
-            s.get("waiting") for s in cast(list[dict[str, Any]], pod_summary.get("container_states") or [])
-        )
+        or any(s.get("waiting") for s in states)
     )
+
+
+def _pods_of(
+    ctx: Context, kind: str, workload: InventoryItem, resource: dict[str, Any]
+) -> list[InventoryItem]:
+    if kind == "Pod":
+        return [item_of(resource)]
+    selector = cast(dict[str, str], workload.summary.get("selector") or {})
+    if not selector:
+        return []
+    return [
+        item_of(p)
+        for p in ctx.cluster.list("pods", namespace=workload.ref.namespace, selector=_selector_text(selector))
+    ]
+
+
+def _unhealthy_details(
+    ctx: Context, pods: list[InventoryItem], namespace: str
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
+    """The events and previous logs of up to three unhealthy pods."""
+    pod_events: dict[str, list[dict[str, Any]]] = {}
+    previous_logs: dict[str, str] = {}
+    for p in [p for p in pods if _unhealthy(p.summary)][:3]:
+        pod_events[p.ref.name] = [
+            _event_row(e) for e in ctx.cluster.events(namespace=namespace, involved=p.ref)
+        ][-20:]
+        for state in cast(list[dict[str, Any]], p.summary.get("container_states") or []):
+            if not (state.get("last_terminated") or int(state.get("restarts") or 0) > 0):
+                continue
+            try:
+                text = ctx.cluster.logs(
+                    p.ref.name, namespace=namespace, container=str(state.get("name")), previous=True, tail=50
+                )
+            except NotFound:
+                text = ""
+            if text.strip():
+                previous_logs[f"{p.ref.name}/{state.get('name')}"] = text
+    return pod_events, previous_logs
 
 
 def run_workload_health(inputs: BaseModel, ctx: Context) -> Result:
@@ -262,81 +292,35 @@ def run_workload_health(inputs: BaseModel, ctx: Context) -> Result:
             summary=str(exc), data=None, coverage="observed_absent", coverage_reason="no such workload"
         )
     workload = item_of(resource)
+    pods = _pods_of(ctx, kind, workload, resource)
     selector = cast(dict[str, str], workload.summary.get("selector") or {})
-    if kind == "Pod":
-        pods = [resource]
-    elif selector:
-        pods = ctx.cluster.list(
-            "pods", namespace=i.namespace, selector=",".join(f"{k}={v}" for k, v in selector.items())
-        )
-    else:
-        pods = []
-    pod_items = [item_of(p) for p in pods]
     owners: list[dict[str, Any]] = []
-    if kind == "Deployment":
-        owners = (
-            [
-                item_of(rs).model_dump(mode="json")
-                for rs in ctx.cluster.list(
-                    "replicasets",
-                    namespace=i.namespace,
-                    selector=",".join(f"{k}={v}" for k, v in selector.items()),
-                )
-            ]
-            if selector
-            else []
-        )
+    if kind == "Deployment" and selector:
+        owners = [
+            item_of(rs).model_dump(mode="json")
+            for rs in ctx.cluster.list(
+                "replicasets", namespace=i.namespace, selector=_selector_text(selector)
+            )
+        ]
     events = [
         _event_row(e)
         for e in ctx.cluster.events(
             namespace=i.namespace, involved=ResourceRef(kind=kind, namespace=i.namespace, name=i.name)
         )
     ]
-    unhealthy = [p for p in pod_items if _unhealthy(p.summary)][:3]
-    pod_events: dict[str, list[dict[str, Any]]] = {}
-    previous_logs: dict[str, str] = {}
-    for p in unhealthy:
-        pod_events[p.ref.name] = [
-            _event_row(e) for e in ctx.cluster.events(namespace=i.namespace, involved=p.ref)
-        ][-20:]
-        for state in cast(list[dict[str, Any]], p.summary.get("container_states") or []):
-            if state.get("last_terminated") or int(state.get("restarts") or 0) > 0:
-                try:
-                    text = ctx.cluster.logs(
-                        p.ref.name,
-                        namespace=i.namespace,
-                        container=str(state.get("name")),
-                        previous=True,
-                        tail=50,
-                    )
-                except NotFound:
-                    text = ""
-                if text.strip():
-                    previous_logs[f"{p.ref.name}/{state.get('name')}"] = text
+    pod_events, previous_logs = _unhealthy_details(ctx, pods, i.namespace)
     data = {
-        "workload": {
-            "ref": workload.ref.model_dump(),
-            "summary": workload.summary,
-            "labels": workload.labels,
-        },
-        "pods": [
-            {
-                "ref": p.ref.model_dump(),
-                "summary": p.summary,
-                "owner": p.owner.model_dump() if p.owner else None,
-            }
-            for p in pod_items
-        ],
+        "workload": _item_dump(workload),
+        "pods": [_item_dump(p) for p in pods],
         "owner_chain": owners,
         "events": events[-50:],
         "unhealthy_pod_events": pod_events,
         "previous_logs": previous_logs,
     }
-    ready = sum(1 for p in pod_items if p.summary.get("ready"))
-    restarts = sum(int(p.summary.get("restarts") or 0) for p in pod_items)
-    counts = f"{ready}/{len(pod_items)} pods ready, {len(unhealthy)} unhealthy, {restarts} restarts"
-    summary = f"{kind} {i.name}: {counts}"
-    return Result(summary=summary, data=data, coverage="observed")
+    ready = sum(1 for p in pods if p.summary.get("ready"))
+    restarts = sum(int(p.summary.get("restarts") or 0) for p in pods)
+    counts = f"{ready}/{len(pods)} pods ready, {len(pod_events)} unhealthy, {restarts} restarts"
+    return Result(summary=f"{kind} {i.name}: {counts}", data=data, coverage="observed")
 
 
 # k8s.changes
@@ -360,71 +344,72 @@ _CHANGE_REASONS = {
     "Evicted",
     "Preempted",
 }
+_CHANGE_KINDS = (
+    "deployments",
+    "statefulsets",
+    "daemonsets",
+    "services",
+    "configmaps",
+    "ingresses",
+    "networkpolicies",
+    "cronjobs",
+    "jobs",
+)
 
 
-def run_changes(inputs: BaseModel, ctx: Context) -> Result:
-    i = cast(ChangesInputs, inputs)
-    start = (ctx.now or now()) - timedelta(hours=i.since_hours)
-    changes: list[dict[str, Any]] = []
-    for rs in ctx.cluster.list("replicasets", namespace=i.namespace):
+def _revision_changes(
+    ctx: Context, namespace: str, start: datetime, name: str | None
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rs in ctx.cluster.list("replicasets", namespace=namespace):
         item = item_of(rs)
-        created = item.created_at
-        if (
-            created
-            and created >= start
-            and (not i.name or (item.owner and item.owner.name == i.name) or item.ref.name == i.name)
-        ):
-            changes.append(
+        about = not name or (item.owner is not None and item.owner.name == name) or item.ref.name == name
+        if item.created_at and item.created_at >= start and about:
+            containers = cast(list[dict[str, Any]], item.summary.get("containers") or [])
+            out.append(
                 {
-                    "time": created.isoformat(),
+                    "time": item.created_at.isoformat(),
                     "kind": "revision",
                     "resource": f"ReplicaSet/{item.ref.name}",
                     "owner": item.owner.model_dump() if item.owner else None,
                     "revision": item.summary.get("revision"),
                     "change_cause": item.summary.get("change_cause"),
-                    "images": [
-                        c.get("image")
-                        for c in cast(list[dict[str, Any]], item.summary.get("containers") or [])
-                    ],
+                    "images": [c.get("image") for c in containers],
                     "replicas": item.summary.get("replicas"),
                 }
             )
-    for kind in (
-        "deployments",
-        "statefulsets",
-        "daemonsets",
-        "services",
-        "configmaps",
-        "ingresses",
-        "networkpolicies",
-        "cronjobs",
-        "jobs",
-    ):
-        for resource in ctx.cluster.list(kind, namespace=i.namespace):
+    return out
+
+
+def _resource_changes(
+    ctx: Context, namespace: str, start: datetime, name: str | None
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for kind in _CHANGE_KINDS:
+        for resource in ctx.cluster.list(kind, namespace=namespace):
             item = item_of(resource)
-            if i.name and item.ref.name != i.name:
+            if name and item.ref.name != name:
                 continue
+            label = f"{item.ref.kind}/{item.ref.name}"
             if item.created_at and item.created_at >= start:
-                changes.append(
-                    {
-                        "time": item.created_at.isoformat(),
-                        "kind": "created",
-                        "resource": f"{item.ref.kind}/{item.ref.name}",
-                    }
-                )
+                out.append({"time": item.created_at.isoformat(), "kind": "created", "resource": label})
             gen, seen = item.summary.get("generation"), item.summary.get("observed_generation")
             if gen is not None and seen is not None and gen != seen:
-                changes.append(
+                out.append(
                     {
                         "time": None,
                         "kind": "rollout_in_progress",
-                        "resource": f"{item.ref.kind}/{item.ref.name}",
+                        "resource": label,
                         "generation": gen,
                         "observed_generation": seen,
                     }
                 )
-    events = [_event_row(e) for e in ctx.cluster.events(namespace=i.namespace)]
-    event_changes = [
+    return out
+
+
+def _event_changes(ctx: Context, namespace: str, start: datetime, name: str | None) -> list[dict[str, Any]]:
+    rows = _since([_event_row(e) for e in ctx.cluster.events(namespace=namespace)], start)
+    return [
         {
             "time": r["time"],
             "kind": "event",
@@ -432,22 +417,26 @@ def run_changes(inputs: BaseModel, ctx: Context) -> Result:
             "reason": r["reason"],
             "message": r["message"],
         }
-        for r in events
-        if r["reason"] in _CHANGE_REASONS
-        and (t := parse_time(r["time"])) is not None
-        and t >= start
-        and (not i.name or i.name in str(r["object"]))
+        for r in rows
+        if r["reason"] in _CHANGE_REASONS and (not name or name in str(r["object"]))
     ]
-    changes.extend(event_changes)
+
+
+def run_changes(inputs: BaseModel, ctx: Context) -> Result:
+    i = cast(ChangesInputs, inputs)
+    start = now() - timedelta(hours=i.since_hours)
+    event_changes = _event_changes(ctx, i.namespace, start, i.name)
+    changes = [
+        *_revision_changes(ctx, i.namespace, start, i.name),
+        *_resource_changes(ctx, i.namespace, start, i.name),
+        *event_changes,
+    ]
     changes.sort(key=lambda c: c["time"] or "")
-    coverage = "observed"
     reason = f"{len(changes)} changes since {start.isoformat(timespec='minutes')}"
+    coverage = "observed"
     if not event_changes and i.since_hours > 1:
         coverage = "observed" if changes else "no_data"
-        reason += (
-            "; the cluster keeps events for about an hour by default, so changes older than that are seen "
-            "only through revisions and creation times"
-        )
+        reason += f"; {EVENTS_NOTE}, so older changes are seen only through revisions and creation times"
     return Result(
         summary=reason,
         data={"changes": changes, "period_start": start.isoformat()},
@@ -466,14 +455,13 @@ class NoInputs(Inputs):
 def run_permissions(inputs: BaseModel, ctx: Context) -> Result:
     matrix = ctx.environment.permissions
     denied = sorted(k for k, v in matrix.items() if not v)
+    checked = ctx.environment.connected_at.isoformat() if ctx.environment.connected_at else None
+    summary = f"{len(matrix) - len(denied)} of {len(matrix)} permissions allowed" + (
+        f"; denied: {', '.join(denied)}" if denied else ""
+    )
     return Result(
-        summary=f"{len(matrix) - len(denied)} of {len(matrix)} permissions allowed"
-        + (f"; denied: {', '.join(denied)}" if denied else ""),
-        data={
-            "permissions": matrix,
-            "denied": denied,
-            "checked_at": ctx.environment.connected_at.isoformat() if ctx.environment.connected_at else None,
-        },
+        summary=summary,
+        data={"permissions": matrix, "denied": denied, "checked_at": checked},
         coverage="observed",
     )
 
@@ -495,28 +483,6 @@ def run_top(inputs: BaseModel, ctx: Context) -> Result:
         )
     return Result(
         summary=f"{len(rows)} {i.kind} with current CPU and memory", data={"rows": rows}, coverage="observed"
-    )
-
-
-def _cap(
-    id: str,
-    title: str,
-    purpose: str,
-    inputs: type[BaseModel],
-    run: Any,
-    permissions: tuple[tuple[str, str], ...],
-    coverage: tuple[str, ...],
-) -> Capability:
-    return Capability(
-        id=id,
-        title=title,
-        purpose=purpose,
-        class_="inspect",
-        systems=K8S,
-        inputs=inputs,
-        permissions=permissions,
-        run=run,
-        coverage=coverage,
     )
 
 
@@ -544,111 +510,108 @@ LIST_ALL: tuple[tuple[str, str], ...] = tuple(
 )
 
 CAPABILITIES: list[Capability] = [
-    _cap(
-        "k8s.inventory",
-        "Inventory of a scope",
-        (
+    INSPECT(
+        id="k8s.inventory",
+        title="Inventory of a scope",
+        inputs=InventoryInputs,
+        run=run_inventory,
+        permissions=LIST_ALL,
+        coverage=("observed", "no_data"),
+        purpose=(
             "What exists in the scope and how it relates: workloads, pods, services, ingresses, policies, "
             "volumes, autoscalers, budgets, config names; relationships marked defined, observed or "
             "inferred. Start here for questions about a whole namespace."
         ),
-        InventoryInputs,
-        run_inventory,
-        LIST_ALL,
-        ("observed", "no_data"),
     ),
-    _cap(
-        "k8s.get",
-        "One resource",
-        (
-            "One resource as the cluster returns it, with a summary of the fields that matter. Secrets: "
-            "metadata only, never the body."
+    INSPECT(
+        id="k8s.get",
+        title="One resource",
+        inputs=GetInputs,
+        run=run_get,
+        permissions=(("get", "pods"),),
+        coverage=("observed", "observed_absent"),
+        purpose=(
+            "One resource as the cluster returns it, with a summary of the fields that matter. "
+            "Secrets: metadata only, never the body."
         ),
-        GetInputs,
-        run_get,
-        (("get", "pods"),),
-        ("observed", "observed_absent"),
     ),
-    _cap(
-        "k8s.list",
-        "Resources of a kind",
-        (
-            "Resources of one kind in a scope, with a label or field selector; summaries, not full bodies. "
-            "Capped."
-        ),
-        ListInputs,
-        run_list,
-        (("list", "pods"),),
-        ("observed", "observed_absent"),
+    INSPECT(
+        id="k8s.list",
+        title="Resources of a kind",
+        inputs=ListInputs,
+        run=run_list,
+        permissions=(("list", "pods"),),
+        coverage=("observed", "observed_absent"),
+        purpose="Resources of one kind in a scope, with a label or field selector; summaries, not bodies.",
     ),
-    _cap(
-        "k8s.events",
-        "Events",
-        (
+    INSPECT(
+        id="k8s.events",
+        title="Events",
+        inputs=EventsInputs,
+        run=run_events,
+        permissions=(("list", "events"),),
+        coverage=("observed", "observed_absent", "no_data"),
+        purpose=(
             "Events in a namespace or about one resource, in a period. Events expire after about an hour, "
             "so an empty answer for a longer period is no_data, not absence."
         ),
-        EventsInputs,
-        run_events,
-        (("list", "events"),),
-        ("observed", "observed_absent", "no_data"),
     ),
-    _cap(
-        "k8s.logs",
-        "Container logs",
-        "The tail of a container's log, current or previous (crashed) container, optionally since a time.",
-        LogsInputs,
-        run_logs,
-        (("get", "pods/log"),),
-        ("observed", "no_data"),
+    INSPECT(
+        id="k8s.logs",
+        title="Container logs",
+        inputs=LogsInputs,
+        run=run_logs,
+        permissions=(("get", "pods/log"),),
+        coverage=("observed", "no_data"),
+        purpose="The tail of a container's log, current or the previous (crashed) one, since a time or not.",
     ),
-    _cap(
-        "k8s.workload_health",
-        "Health of a workload",
-        (
+    INSPECT(
+        id="k8s.workload_health",
+        title="Health of a workload",
+        inputs=WorkloadInputs,
+        run=run_workload_health,
+        permissions=(("get", "pods"), ("list", "pods"), ("list", "events"), ("get", "pods/log")),
+        coverage=("observed", "observed_absent"),
+        purpose=(
             "A workload's pods with their conditions, restarts, last terminations and waiting reasons; its "
-            "owner chain; its events; the events and previous logs of up to three unhealthy pods. Use for "
-            "'why is X failing'."
+            "owner chain; its events; the events and previous logs of up to three unhealthy pods. "
+            "Use for 'why is X failing'."
         ),
-        WorkloadInputs,
-        run_workload_health,
-        (("get", "pods"), ("list", "pods"), ("list", "events"), ("get", "pods/log")),
-        ("observed", "observed_absent"),
     ),
-    _cap(
-        "k8s.changes",
-        "What changed in a period",
-        (
+    INSPECT(
+        id="k8s.changes",
+        title="What changed in a period",
+        inputs=ChangesInputs,
+        run=run_changes,
+        permissions=(("list", "replicasets"), ("list", "deployments"), ("list", "events")),
+        coverage=("observed", "no_data"),
+        purpose=(
             "Revisions (ReplicaSets with their change cause and images), resources created, rollouts in "
             "progress and change events in a namespace since a time. Use for 'what changed before the "
             "problem'."
         ),
-        ChangesInputs,
-        run_changes,
-        (("list", "replicasets"), ("list", "deployments"), ("list", "events")),
-        ("observed", "no_data"),
     ),
-    _cap(
-        "k8s.permissions",
-        "What K8sHolmes may read",
-        (
+    INSPECT(
+        id="k8s.permissions",
+        title="What K8sHolmes may read",
+        inputs=NoInputs,
+        run=run_permissions,
+        permissions=(),
+        coverage=("observed",),
+        purpose=(
             "The permission matrix of the environment from the last connection check: which verbs on which "
             "kinds the cluster allows."
         ),
-        NoInputs,
-        run_permissions,
-        (),
-        ("observed",),
     ),
-    _cap(
-        "k8s.top",
-        "Current CPU and memory",
-        "Current CPU and memory of pods or nodes from the metrics server, when one exists.",
-        TopInputs,
-        run_top,
-        (("list", "pods.metrics.k8s.io"),),
-        ("observed", "cannot_answer"),
+    INSPECT(
+        id="k8s.top",
+        title="Current CPU and memory",
+        inputs=TopInputs,
+        run=run_top,
+        permissions=(("list", "pods.metrics.k8s.io"),),
+        coverage=("observed", "cannot_answer"),
+        purpose="Current CPU and memory of pods or nodes from the metrics server, when one exists.",
     ),
 ]
 
-__all__ = ["CAPABILITIES", "WORKLOAD_KINDS"]
+__all__ = ["CAPABILITIES", "INSPECT", "K8S", "WORKLOAD_KINDS"]

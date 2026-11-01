@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 
 from k8sholmes import records
-from k8sholmes.errors import ModelFailure
+from k8sholmes.errors import InvalidInput, ModelFailure
 from k8sholmes.models import OpenAICompatible, price_of, run_capability_tests, usable_for_investigations
+from tests.helpers import closed_port
 
 SEEN: list[dict[str, Any]] = []
 MODE = {"value": "ok"}
@@ -46,6 +47,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if MODE["value"] == "bad":
             self._send(400, b'{"error": "bad request"}')
+            return
+        if MODE["value"] == "garbage":
+            self._send(200, b"<html>not json</html>")
             return
         if body.get("response_format") and MODE["value"] == "no_structured":
             self._send(400, b'{"error": "response_format is not supported"}')
@@ -157,7 +161,6 @@ def test_streaming_assembles_content_and_tool_calls(endpoint: records.ModelEndpo
     assert reply.tool_calls[0].arguments == {"city": "Paris"}
     assert reply.finish_reason == "tool_calls"
     assert reply.prompt_tokens == 7
-    assert reply.streamed
 
 
 def test_structured_replies_and_the_fallback(endpoint: records.ModelEndpoint) -> None:
@@ -191,7 +194,10 @@ def test_failures_are_typed_and_retryable_or_not(endpoint: records.ModelEndpoint
     assert not bad.value.retryable
     down = OpenAICompatible(
         endpoint.model_copy(
-            update={"base_url": "http://127.0.0.1:9/v1", "limits": records.ModelLimits(timeout_ms=500)}
+            update={
+                "base_url": f"http://127.0.0.1:{closed_port()}/v1",
+                "limits": records.ModelLimits(timeout_ms=500),
+            }
         ),
         "k",
     )
@@ -217,9 +223,22 @@ def test_capability_tests_pass_on_a_good_endpoint_and_fail_honestly(endpoint: re
     assert "401" in results["connectivity"].detail
     assert results["tool_calling"].detail.startswith("not run")
     tested = endpoint.model_copy(update={"tests": results})
-    with pytest.raises(Exception, match="failed the tool-calling test"):
+    with pytest.raises(InvalidInput, match="failed the tool-calling test"):
         usable_for_investigations(tested)
-    with pytest.raises(Exception, match="has not been tested"):
+    with pytest.raises(InvalidInput, match="has not been tested"):
         usable_for_investigations(endpoint)
     assert price_of(endpoint, 1_000_000, 500_000) == 2.0
     assert price_of(endpoint.model_copy(update={"price": None}), 1, 1) is None
+
+
+def test_a_non_json_body_is_a_typed_permanent_failure(endpoint: records.ModelEndpoint) -> None:
+    MODE["value"] = "garbage"
+    with pytest.raises(ModelFailure, match="not JSON") as failure:
+        OpenAICompatible(endpoint, "sk-test-key").complete([{"role": "user", "content": "hi"}])
+    assert not failure.value.retryable
+
+
+def test_the_client_keeps_the_model_contract(endpoint: records.ModelEndpoint) -> None:
+    from k8sholmes.testing import check_model
+
+    check_model(OpenAICompatible(endpoint, "sk-test-key"))

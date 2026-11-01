@@ -1,21 +1,20 @@
 """Environments: connecting, the permission matrix, the inventory snapshot (design §4).
 
-An environment is one kubeconfig context (or a recording). Connecting asks the cluster what it may read
-and keeps the answers on the environment as the permission matrix; the inventory lists the kinds the
-matrix allows and builds the relationships by code.
+An environment is one kubeconfig context (or a recording; the composition root in `app.py` picks the
+adapter). Connecting asks the cluster what it may read and keeps the answers on the environment as the
+permission matrix; the inventory lists the kinds the matrix allows and builds the relationships by code.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from k8sholmes.cluster import KINDS, Cluster, Kubectl, canonical_kind
+from k8sholmes.cluster import Cluster, canonical_kind, plural_of
 from k8sholmes.errors import ClusterUnreachable, InvalidInput, NotFound, PermissionRefused
-from k8sholmes.inventory import INVENTORY_KINDS, get, item_of
+from k8sholmes.inventory import INVENTORY_KINDS, dig, item_of
 from k8sholmes.records import Environment, Inventory, InventoryItem, now
 from k8sholmes.relationships import build_relationships
 from k8sholmes.store import Store
-from k8sholmes.testing.cluster import RecordedCluster
 
 # (verb, kind) pairs the built-in capabilities need (design §4.1); checked cluster-wide on connect
 PERMISSION_CHECKS: tuple[tuple[str, str], ...] = (
@@ -46,24 +45,6 @@ PERMISSION_CHECKS: tuple[tuple[str, str], ...] = (
     ("list", "pods.metrics.k8s.io"),
     ("list", "nodes.metrics.k8s.io"),
 )
-PLURALS: dict[str, str] = {
-    kind: plural for plural, kind in KINDS.items() if plural.endswith("s") and not plural.endswith("ss")
-}
-PLURALS.update(
-    {
-        "Ingress": "ingresses",
-        "NetworkPolicy": "networkpolicies",
-        "StorageClass": "storageclasses",
-        "Endpoints": "endpoints",
-    }
-)
-
-
-def cluster_for(environment: Environment) -> Cluster:
-    """The real adapter, or the recording the environment names (the demo and tests)."""
-    if environment.recording:
-        return RecordedCluster(environment.recording)
-    return Kubectl(environment.context, kubeconfig=environment.kubeconfig)
 
 
 def create_environment(
@@ -79,9 +60,8 @@ def create_environment(
     return env
 
 
-def connect(store: Store, environment: Environment, cluster: Cluster | None = None) -> Environment:
+def connect(store: Store, environment: Environment, cluster: Cluster) -> Environment:
     """Ask the cluster its version, its kinds and the permission matrix; keep them on the environment."""
-    cluster = cluster or cluster_for(environment)
     try:
         version = cluster.version()
     except (ClusterUnreachable, PermissionRefused) as exc:
@@ -99,7 +79,7 @@ def connect(store: Store, environment: Environment, cluster: Cluster | None = No
             matrix[f"{verb} {kind}"] = bool(cluster.can_i(verb, kind))
         except (ClusterUnreachable, PermissionRefused, NotFound):
             matrix[f"{verb} {kind}"] = False
-    server_version = str(get(version, "serverVersion", "gitVersion") or "") or None
+    server_version = str(dig(version, "serverVersion", "gitVersion") or "") or None
     updated = environment.model_copy(
         update={"permissions": matrix, "connected_at": now(), "server_version": server_version}
     )
@@ -122,7 +102,7 @@ def take_inventory(
     unreadable: dict[str, str] = {}
     truncated: list[str] = []
     for kind in INVENTORY_KINDS:
-        plural = PLURALS.get(kind, kind.lower() + "s")
+        plural = plural_of(kind)
         allowed = environment.permissions.get(f"list {plural}")
         if allowed is False:
             unreadable[kind] = "the cluster refuses list"

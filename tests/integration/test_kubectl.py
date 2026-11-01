@@ -22,6 +22,8 @@ if mode == "forbidden":
     sys.stderr.write('Error from server (Forbidden): pods is forbidden: User "x" cannot list resource "pods"\n'); sys.exit(1)
 if mode == "notfound":
     sys.stderr.write('Error from server (NotFound): pods "ghost" not found\n'); sys.exit(1)
+if mode == "notfound_for_missing" and "this-pod-does-not-exist-9f3a" in args:
+    sys.stderr.write('Error from server (NotFound): pods "this-pod-does-not-exist-9f3a" not found\n'); sys.exit(1)
 if mode == "down":
     sys.stderr.write('The connection to the server 127.0.0.1:6443 was refused\n'); sys.exit(1)
 if mode == "nometrics":

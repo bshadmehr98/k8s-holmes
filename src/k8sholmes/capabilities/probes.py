@@ -13,8 +13,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
-from k8sholmes.capabilities import Capability
-from k8sholmes.capabilities.kubernetes import Inputs
+from k8sholmes.capabilities import Capability, Inputs
 from k8sholmes.evidence import Result
 
 

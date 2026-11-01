@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from k8sholmes import knowledge
+from k8sholmes import knowledge, records
 from k8sholmes.records import AcceptedException, Finding, ResourceRef, now
 from tests.e2e.conftest import Demo
 
@@ -20,11 +20,13 @@ def single_replica(demo: Demo, inv) -> dict[str, Finding]:
 def test_exceptions_apply_exactly_and_expired_or_revoked_ones_are_named(demo: Demo) -> None:
     exc = knowledge.create_exception(
         demo.app.store,
-        environment_id=demo.env.id,
-        condition="replicas.single",
-        scope=SCHEDULER,
-        explanation="singleton",
-        approved_by=f"user:{demo.user.id}",
+        records.AcceptedException(
+            environment_id=demo.env.id,
+            condition="replicas.single",
+            scope=SCHEDULER,
+            explanation="singleton",
+            approved_by=f"user:{demo.user.id}",
+        ),
     )
     inv = demo.ask("What reliability practices are we overlooking?")
     found = single_replica(demo, inv)

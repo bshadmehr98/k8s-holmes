@@ -11,12 +11,12 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from k8sholmes.capabilities import Capability, Context
-from k8sholmes.capabilities.kubernetes import K8S, Inputs
+from k8sholmes.capabilities import Capability, Context, Inputs
+from k8sholmes.capabilities.kubernetes import INSPECT
 from k8sholmes.environments import take_inventory
 from k8sholmes.errors import NotFound
 from k8sholmes.evidence import Result
-from k8sholmes.inventory import WORKLOAD_KINDS, get, item_of
+from k8sholmes.inventory import WORKLOAD_KINDS, dig, item_of
 from k8sholmes.records import Inventory, InventoryItem
 
 OUTSIDE = (
@@ -254,12 +254,12 @@ def run_safeguards(inputs: BaseModel, ctx: Context) -> Result:
 
 
 def _ns_name(resource: dict[str, Any]) -> str:
-    return f"{get(resource, 'metadata', 'namespace')}/{get(resource, 'metadata', 'name')}"
+    return f"{dig(resource, 'metadata', 'namespace')}/{dig(resource, 'metadata', 'name')}"
 
 
 def _rules_of(rule_resource: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for group in cast(list[dict[str, Any]], get(rule_resource, "spec", "groups", default=[]) or []):
+    for group in cast(list[dict[str, Any]], dig(rule_resource, "spec", "groups", default=[]) or []):
         for rule in cast(list[dict[str, Any]], group.get("rules", []) or []):
             if rule.get("alert"):
                 out.append(
@@ -303,7 +303,7 @@ def run_alert_rules(inputs: BaseModel, ctx: Context) -> Result:
             monitors.extend(
                 {
                     "monitor": f"ServiceMonitor/{_ns_name(m)}",
-                    "selector": get(m, "spec", "selector", "matchLabels", default={}),
+                    "selector": dig(m, "spec", "selector", "matchLabels", default={}),
                 }
                 for m in ctx.cluster.list("servicemonitors", namespace=ns)
             )
@@ -341,84 +341,67 @@ def run_alert_rules(inputs: BaseModel, ctx: Context) -> Result:
     )
 
 
-def _cap(
-    id: str,
-    title: str,
-    purpose: str,
-    inputs: type[BaseModel],
-    run: Any,
-    permissions: tuple[tuple[str, str], ...],
-    coverage: tuple[str, ...],
-) -> Capability:
-    return Capability(
-        id=id,
-        title=title,
-        purpose=purpose,
-        class_="inspect",
-        systems=K8S,
-        inputs=inputs,
-        permissions=permissions,
-        run=run,
-        coverage=coverage,
-    )
-
-
 CAPABILITIES: list[Capability] = [
-    _cap(
-        "k8s.network_exposure",
-        "Network exposure",
-        (
-            "Services of type LoadBalancer or NodePort, Ingresses and their hosts, NetworkPolicies and "
-            "which pods they select, pods selected by none, namespaces without policies. Only what the "
-            "cluster shows; anything beyond it is cannot_answer."
+    INSPECT(
+        id="k8s.network_exposure",
+        title="Network exposure",
+        inputs=ScopeInputs,
+        run=run_network_exposure,
+        permissions=(
+            ("list", "services"),
+            ("list", "ingresses"),
+            ("list", "networkpolicies"),
+            ("list", "pods"),
         ),
-        ScopeInputs,
-        run_network_exposure,
-        (("list", "services"), ("list", "ingresses"), ("list", "networkpolicies"), ("list", "pods")),
-        ("observed", "cannot_answer"),
+        coverage=("observed", "cannot_answer"),
+        purpose=(
+            "Services of type LoadBalancer or NodePort, Ingresses and their hosts, NetworkPolicies and which "
+            "pods they select, pods selected by none, namespaces without policies. Only what the cluster "
+            "shows; anything beyond it is cannot_answer."
+        ),
     ),
-    _cap(
-        "k8s.service_backends",
-        "A service's backends",
-        (
-            "A Service's selector, the pods it matches and their readiness, its endpoint slices, and "
-            "whether its target ports match a container port. Traffic is cannot_answer."
+    INSPECT(
+        id="k8s.service_backends",
+        title="A service's backends",
+        inputs=ServiceInputs,
+        run=run_service_backends,
+        permissions=(("get", "pods"), ("list", "pods"), ("list", "endpointslices")),
+        coverage=("observed", "observed_absent", "cannot_answer"),
+        purpose=(
+            "A Service's selector, the pods it matches and their readiness, its endpoint slices, and whether "
+            "its target ports match a container port. Traffic is cannot_answer."
         ),
-        ServiceInputs,
-        run_service_backends,
-        (("get", "pods"), ("list", "pods"), ("list", "endpointslices")),
-        ("observed", "observed_absent", "cannot_answer"),
     ),
-    _cap(
-        "k8s.safeguards",
-        "Reliability safeguards",
-        (
-            "Per workload: liveness and readiness probes, requests and limits, replicas, a "
-            "PodDisruptionBudget, an autoscaler, anti-affinity, :latest tags, token automount; with counts "
-            "computed by code. The basis of a reliability review."
-        ),
-        ScopeInputs,
-        run_safeguards,
-        (
+    INSPECT(
+        id="k8s.safeguards",
+        title="Reliability safeguards",
+        inputs=ScopeInputs,
+        run=run_safeguards,
+        permissions=(
             ("list", "deployments"),
             ("list", "statefulsets"),
             ("list", "daemonsets"),
             ("list", "poddisruptionbudgets"),
             ("list", "horizontalpodautoscalers"),
         ),
-        ("observed",),
+        coverage=("observed",),
+        purpose=(
+            "Per workload: liveness and readiness probes, requests and limits, replicas, a "
+            "PodDisruptionBudget, an autoscaler, anti-affinity, :latest tags, token automount; with counts "
+            "computed by code. The basis of a reliability review."
+        ),
     ),
-    _cap(
-        "k8s.alert_rules",
-        "Alert rules",
-        (
+    INSPECT(
+        id="k8s.alert_rules",
+        title="Alert rules",
+        inputs=ScopeInputs,
+        run=run_alert_rules,
+        permissions=(("list", "prometheusrules"), ("list", "servicemonitors")),
+        coverage=("observed", "cannot_answer"),
+        purpose=(
             "PrometheusRule alerts and ServiceMonitors in the scope when those CRDs exist, and which "
             "workloads no alert references. Whether an alert fired is cannot_answer; without the CRDs "
             "everything is."
         ),
-        ScopeInputs,
-        run_alert_rules,
-        (("list", "prometheusrules"), ("list", "servicemonitors")),
-        ("observed", "cannot_answer"),
     ),
 ]

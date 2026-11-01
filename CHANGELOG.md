@@ -6,6 +6,10 @@ design changed is in [`design/changes/`](design/changes/).
 
 ## [Unreleased]
 
+### Removed
+
+- The error `InvalidCase` of the unreleased skeleton (there are no case files in the accepted design).
+
 ### Added
 
 - **Milestone 1: the engine on records** ([0001](design/changes/0001-initial-design.md)). Investigations

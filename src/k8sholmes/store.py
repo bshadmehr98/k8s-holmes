@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from k8sholmes import records
-from k8sholmes.errors import NotFound, StoreVersionError
+from k8sholmes.errors import InvalidInput, NotFound, StoreVersionError
 from k8sholmes.records import Record
 
 R = TypeVar("R", bound=Record)
@@ -139,10 +139,8 @@ class Store:
 
     @staticmethod
     def _table_for(record: Record) -> tuple[str, tuple[str, ...]]:
-        for table, (cls, columns) in TABLES.items():
-            if type(record) is cls:
-                return table, columns
-        raise TypeError(f"no table holds {type(record).__name__}")
+        table = Store._table_name(type(record))
+        return table, TABLES[table][1]
 
     def put(self, record: Record) -> None:
         """Insert or replace one record (validated by its model)."""
@@ -163,6 +161,28 @@ class Store:
             raise NotFound(f"{cls.__name__} {record_id!r} does not exist")
         return cls.model_validate_json(row[0])
 
+    @staticmethod
+    def _where(
+        table: str, where: dict[str, Any] | None, order_by: str = "rowid"
+    ) -> tuple[str, list[Any], str]:
+        """The WHERE clause and its parameters; column names are checked against the indexed columns."""
+        allowed = {"id", "rowid", *TABLES[table][1]}
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (where or {}).items():
+            if column not in allowed:
+                raise InvalidInput(f"{table} has no indexed column {column!r}; one of {sorted(allowed)}")
+            if value is None:
+                clauses.append(f"{column} IS NULL")
+            else:
+                clauses.append(f"{column} = ?")
+                params.append(_column_value(value))
+        order_column, _, direction = order_by.partition(" ")
+        if order_column not in allowed or direction.upper() not in ("", "ASC", "DESC"):
+            raise InvalidInput(f"{table} cannot be ordered by {order_by!r}")
+        clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return clause, params, f" ORDER BY {order_column} {direction}".rstrip()
+
     def find(
         self,
         cls: type[R],
@@ -173,29 +193,34 @@ class Store:
     ) -> list[R]:
         """Records whose indexed columns equal `where` (None matches NULL)."""
         table = self._table_name(cls)
-        clauses: list[str] = []
-        params: list[Any] = []
-        for column, value in (where or {}).items():
-            if value is None:
-                clauses.append(f"{column} IS NULL")
-            else:
-                clauses.append(f"{column} = ?")
-                params.append(_column_value(value))
-        sql = f"SELECT data FROM {table}"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += f" ORDER BY {order_by}"
+        clause, params, order = self._where(table, where, order_by)
+        sql = f"SELECT data FROM {table}{clause}{order}"
         if limit is not None:
             sql += f" LIMIT {int(limit)}"
         rows = self._connection().execute(sql, params).fetchall()
         return [cls.model_validate_json(r[0]) for r in rows]
+
+    def get_many(self, cls: type[R], ids: list[str]) -> list[R]:
+        """The records with these ids, in this order; ids that no longer exist are skipped."""
+        if not ids:
+            return []
+        table = self._table_name(cls)
+        marks = ", ".join("?" for _ in ids)
+        rows = (
+            self._connection().execute(f"SELECT id, data FROM {table} WHERE id IN ({marks})", ids).fetchall()
+        )
+        by_id = {r[0]: cls.model_validate_json(r[1]) for r in rows}
+        return [by_id[i] for i in ids if i in by_id]
 
     def delete(self, cls: type[Record], record_id: str) -> None:
         table = self._table_name(cls)
         self._connection().execute(f"DELETE FROM {table} WHERE id = ?", (record_id,))
 
     def count(self, cls: type[Record], where: dict[str, Any] | None = None) -> int:
-        return len(self.find(cls, where))
+        table = self._table_name(cls)
+        clause, params, _ = self._where(table, where)
+        row = self._connection().execute(f"SELECT COUNT(*) FROM {table}{clause}", params).fetchone()
+        return int(row[0])
 
     @staticmethod
     def _table_name(record_class: type[Record]) -> str:
