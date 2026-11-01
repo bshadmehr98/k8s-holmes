@@ -18,9 +18,10 @@ check and its §19 says what is built. Why the design looks like this: the owner
 
 **Status:** design 0001 is accepted (2026-11-01, from the owner's brief) and being built in milestones
 M1 to M4 (the table in [design/changes/0001-initial-design.md](design/changes/0001-initial-design.md)).
-Milestones 1 (the engine on records, the capabilities, the models, the demo and the command line) and 2
-(the web interface and the API) are built; `design/current.md` §19 lists what that covers. Do not implement anything the design does not say;
-a gap becomes a `D-` entry or a proposed change record.
+Milestones 1 (the engine on records, the capabilities, the models, the demo and the command line), 2 (the
+web interface and the API) and 3 (reports, proposals and verification, saved and recurring investigations,
+retention) are built; `design/current.md` §19 lists what that covers. Do not implement anything the design
+does not say; a gap becomes a `D-` entry or a proposed change record.
 
 ## Commands
 
@@ -51,11 +52,11 @@ src/k8sholmes/
   models.py                        the Model port, the OpenAI-compatible client, the capability tests, usage and secrets
   app.py  cli.py                   the composition root (home, store, auth, registry, engine, the demo); the command line
   server.py  runner.py             the standard-library web server and static page with the event stream; background runs and their events
-  api/                             the JSON API: dispatch and the checks (__init__), account, environments (and capabilities), investigations (and evidence, findings), knowledge, settings
-  reports.py                       the plain-text report and the export shape the CLI and the API share (the report kinds of §10 arrive with M3)
+  api/                             the JSON API: dispatch and the checks (__init__), account, environments (and capabilities), investigations (and evidence, findings), knowledge, reports (and shares, the model comparison), proposals, saved, settings
+  reports/                         reports built from records (base: sections, revisions, edits, Markdown, shares; investigation: the live summary and the report; reviews: incident and reliability)
+  proposals.py  saved.py  retention.py   proposals and verification by code; saved investigations, comparison by key, notifications, the scheduler; the retention purge
   page/                            the interface: index.html, tokens.css, app.css, app.js and views/*.js; no build step
   testing/                         FakeCluster, RecordedCluster, ScriptedModel, the contract checker, the demo cluster and the demo model
-  (planned)                        proposals.py, saved.py (M3)
 tests/unit|contract|integration|e2e   default suite; tests/cluster|hosted: by hand, marked
 design/                why and how: README, current.md, changes/, decisions.md, history/
 docs/  examples/       user docs and runnable examples, both executed by tests once they exist

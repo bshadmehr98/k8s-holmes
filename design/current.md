@@ -758,9 +758,19 @@ history), Knowledge (exceptions with their history, notes), Settings (environmen
 capability tests, users and grants, retention, audit), the tokens and the mark (§15.1 to §15.4); `serve`
 and `setup` (§15.5). Guarantees 14, 16, 17 and 21 are tested.
 
-**Planned:** reports, shares, proposals, verification, saved and recurring investigations, retention,
-model comparison (§10, §11, §12, §13.4, §16.3, milestone 3); the real-cluster suite, the hosted model test
-and the user documentation (milestone 4).
+**Implemented (milestone 3, 2026-11-01):** reports built from records with revisions, a person's edits
+kept apart, Markdown and JSON downloads and view-only share links: the live summary, the investigation
+report, the incident review, the reliability and monitoring review and the comparison (§10); proposals with
+their states, applied by people and verified by rerunning their capabilities, `verified` only when the
+condition is observed absent, the findings set to `verified` and nothing else (§11.1, §11.2); saved
+investigations run by hand or from the server's scheduler thread, compared with the run before by finding
+key, a one-line result when nothing changed, webhook notifications carrying the summary and a link (§12);
+the fixed-evidence model comparison (§13.4; a free comparison is an investigation started with another
+endpoint); the retention purge from the scheduler thread, never touching pinned or referenced rows (§16.3);
+the Reports page, the Report and Proposals tabs, saved investigations under Investigations (§15).
+Guarantees 11, 12, 13, 18 and 24 are tested.
+
+**Planned:** the real-cluster suite, the hosted model test and the user documentation (milestone 4).
 
 ## 20. Known limits (0.1)
 

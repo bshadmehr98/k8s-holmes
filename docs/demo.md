@@ -16,7 +16,7 @@ k8sholmes demo --question "Why is api restarting?"
 | Is this environment isolated from external networks? | `exposure.loadbalancer` on `web`; `policy.unselected-pods` | anything outside the cluster is `cannot_answer` |
 | Which important alerts are missing? | `alert.missing` for `api`, `worker`, `scheduler`; `replicas.single` for `scheduler` and `worker` | whether an alert fired is `cannot_answer` |
 | What changed before this problem started? | `change.before-incident` for the api revisions | none |
-| Did the latest change resolve the api issue? (`--after-fix`) | `custom.healthy-after-change` | recovery is verified only by a verification run (milestone 3) |
+| Did the latest change resolve the api issue? (`--after-fix`) | `custom.healthy-after-change` | recovery is `verified` only by a proposal's verification run, which reruns `k8s.workload_health` and finds `pod.crashloop.oom` observed absent |
 
 Accepting `replicas.single` on `scheduler` as intentional makes the next run show it as `accepted_risk`;
 `worker`, a similar finding on another resource, stays open.

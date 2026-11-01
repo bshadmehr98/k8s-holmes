@@ -16,6 +16,7 @@ revised by the owner at any time:
 | [D-008](#d-008-sqlite) | SQLite as the store? | awaiting owner review |
 | [D-009](#d-009-the-model-client-over-urllib) | The model client over `urllib`? | awaiting owner review |
 | [D-011](#d-011-local-accounts) | Local accounts with roles per environment? | awaiting owner review |
+| [D-021](#d-021-choices-of-milestone-3) | The choices of milestone 3: short-lived evidence, verification by code, the scheduler, shares, model comparison? | awaiting owner review |
 | [D-014](#d-014-one-probe-off-by-default) | One probe capability, off by default? | awaiting owner review |
 
 ## The owner's answers (2026-11-01)
@@ -167,3 +168,24 @@ revised by the owner at any time:
   lists capabilities under `admin`), so the Capabilities page shows the settings form to administrators only;
   the first administrator's token lives in the home folder until used (`auth.setup_token`).
 - **Status:** designer's choice from the review of M2.
+
+## D-021: Choices of milestone 3  (2026-11-01)
+
+- **Choice:** (a) the evidence of `k8s.logs` and `k8s.top` is `short` (raw, bulky, time-bound); every other
+  capability's evidence lives with its investigation; a finding that leaves `open` pins the evidence it
+  cites. (b) A verification is judged by code for the known conditions (`pod.crashloop.oom`,
+  `replicas.single`, `probe.missing`, `limits.missing`, `pdb.missing`, `service.no-backends`,
+  `alert.missing`); for any other condition the outcome is `not_verified` with "compare by hand", never
+  `verified`. (c) The comparison of two runs hashes each piece of evidence without its bookkeeping keys
+  (`inventory_id`, `period_start`, `period_end`, `taken_at`), so a moving window is not "changed evidence".
+  (d) The scheduler ticks every 60 s in the server, runs a due saved investigation as the person who saved it,
+  moves `next_run_at` before starting (a failing start never loops) and purges once at its first tick and
+  then daily; schedules run only while the server runs (§20). (e) A share token is random, shown once,
+  stored as a SHA-256 hash, lasts 1 to 90 days (default 7), opens one report and nothing else of the API.
+  (f) Proposal states by role: investigators propose, reject and reopen; operators approve, mark applied and
+  verify; `verified` is only ever set by a verification. (g) The model comparison of §13.4 is the
+  fixed-evidence one; a free comparison is an investigation started with another endpoint, labelled by its
+  own model name, with no separate feature.
+- **Why:** each keeps the guarantee (24, 18, 13, 21) with the least machinery; (b) in particular refuses
+  to let a model or a heuristic declare a fix verified.
+- **Status:** designer's choice from milestone 3; awaiting owner review.

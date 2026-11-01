@@ -12,6 +12,19 @@ design changed is in [`design/changes/`](design/changes/).
 
 ### Added
 
+- **Milestone 3: reports and follow-through** ([0001](design/changes/0001-initial-design.md)). Reports are
+  built by code from stored records: the live summary, the investigation report, the incident review, the
+  reliability and monitoring review and the comparison of two runs; every number is a count of the records
+  it names, a regeneration is a new revision, a person's edits keep their byline apart from the generated
+  text, downloads are Markdown and JSON, and a view-only share link opens one report without signing in
+  until it expires or is revoked. Proposals are made from findings, moved through their states by people
+  (K8sHolmes never applies one) and verified by rerunning their capabilities: `verified` only when the
+  condition is observed absent, with the evidence before and after side by side. Saved investigations run by
+  hand or on a schedule from the server, each run compared with the one before by finding key (new, resolved,
+  changed evidence, unchanged counted), a one-line result when nothing changed, and a webhook notification
+  carrying the summary and a link. The retention purge runs nightly and removes only what the policy says,
+  never anything pinned or referenced, writing what it removed to the audit log. A fixed-evidence model
+  comparison concludes with other endpoints on an investigation's stored evidence.
 - **Milestone 2: the web interface** ([0001](design/changes/0001-initial-design.md)). `k8sholmes serve`
   runs the interface on the loopback interface: ask a question, watch the steps and calls arrive, read the
   answer first and the findings with their evidence in an inspector, accept a finding as intentional,
