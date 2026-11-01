@@ -721,8 +721,27 @@ is removed.
 
 ## 19. Implemented and planned
 
-Updated as milestones land (the change record lists them). As of 2026-11-01: nothing of this design is
-implemented; the repository holds the design, the process and the package skeleton.
+Updated as milestones land.
+
+**Implemented (milestone 1, 2026-11-01):** the records (§2) and the SQLite store with its versioned
+schema (§16.1); users, roles, sessions and the audit log (§14.1, §14.4); the `Cluster` port with the
+read-only `kubectl` adapter, recordings, `FakeCluster` and the contract checker (§5.3); environments with
+the permission matrix, the inventory and relationships with their basis (§4); the capability model, the
+registry, the code gate and execution into calls and evidence (§5.1, §5.2); the sixteen built-in
+capabilities (§5.3); extensions through entry points and command capabilities (§5.5); evidence with
+coverage, the redactor and size caps (§7, §14.3); knowledge notes and exceptions with exact matching,
+expiry, revocation and revisions (§9); the engine's five phases, validation of the conclusion, budgets,
+cancel, resume, follow-up and interruption marking (§6, §16.2); findings with kinds, states, keys and
+revisions (§8); the `Model` port, the OpenAI-compatible client with tool calls, streaming, structured
+replies, typed failures and the capability tests (§13.1, §13.2, §13.3); the demo environment and its
+offline investigator (§17.2); the command line's `investigate`, `capabilities`, `environments`, `demo`
+and `export` (§15.5, with a plain-text report until §10 lands). Guarantees 1 to 10, 15, 19, 20, 22 and 23
+are tested.
+
+**Planned:** the web interface and `serve`, `setup` (§11, §15, milestone 2); reports, shares, proposals,
+verification, saved and recurring investigations, retention, model comparison (§10, §11, §12, §13.4,
+§16.3, milestone 3); the real-cluster suite, the hosted model test and the user documentation
+(milestone 4).
 
 ## 20. Known limits (0.1)
 
