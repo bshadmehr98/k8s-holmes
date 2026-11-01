@@ -107,6 +107,7 @@ src/k8sholmes/
   models.py             the Model port, the OpenAI-compatible client, capability tests, usage, the secrets file (§13)
   app.py                the composition root: the home folder, the store, auth, the registry, the engine, the demo
   server.py  api.py     the web server (standard library), the JSON API and server-sent events (§15)
+  runner.py             investigations in background threads, the event bus the stream reads, idempotency keys
   page/                 the interface: static HTML, CSS tokens, JavaScript modules, no build step (§15)
   cli.py                the command line (§15.5)
   testing/              FakeCluster, RecordedCluster, ScriptedModel, DemoModel, the demo cluster, contract checkers
@@ -747,10 +748,18 @@ offline investigator (§17.2); the command line's `investigate`, `capabilities`,
 and `export` (§15.5, with a plain-text report until §10 lands). Guarantees 1 to 10, 15, 19, 20, 22 and 23
 are tested.
 
-**Planned:** the web interface and `serve`, `setup` (§11, §15, milestone 2); reports, shares, proposals,
-verification, saved and recurring investigations, retention, model comparison (§10, §11, §12, §13.4,
-§16.3, milestone 3); the real-cluster suite, the hosted model test and the user documentation
-(milestone 4).
+**Implemented (milestone 2, 2026-11-01):** the web server on the loopback interface, the JSON API with the
+session, role and environment check on every route, server-sent events for a running investigation,
+investigations and follow-ups in background threads with idempotency keys (§15, §16.2); the interface:
+Investigate, Investigations, the investigation page (answer first, findings, activity, evidence, history,
+an inspector, accept as intentional, follow-up, cancel and resume), Capabilities (catalog, settings, test,
+history), Knowledge (exceptions with their history, notes), Settings (environments, models with the
+capability tests, users and grants, retention, audit), the tokens and the mark (§15.1 to §15.4); `serve`
+and `setup` (§15.5). Guarantees 14, 16, 17 and 21 are tested.
+
+**Planned:** reports, shares, proposals, verification, saved and recurring investigations, retention,
+model comparison (§10, §11, §12, §13.4, §16.3, milestone 3); the real-cluster suite, the hosted model test
+and the user documentation (milestone 4).
 
 ## 20. Known limits (0.1)
 

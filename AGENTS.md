@@ -18,8 +18,8 @@ check and its §19 says what is built. Why the design looks like this: the owner
 
 **Status:** design 0001 is accepted (2026-11-01, from the owner's brief) and being built in milestones
 M1 to M4 (the table in [design/changes/0001-initial-design.md](design/changes/0001-initial-design.md)).
-Milestone 1 (the engine on records, the capabilities, the models, the demo and the command line) is
-built; `design/current.md` §19 lists what that covers. Do not implement anything the design does not say;
+Milestones 1 (the engine on records, the capabilities, the models, the demo and the command line) and 2
+(the web interface and the API) are built; `design/current.md` §19 lists what that covers. Do not implement anything the design does not say;
 a gap becomes a `D-` entry or a proposed change record.
 
 ## Commands
@@ -31,7 +31,7 @@ uv run pytest                        # default suite (fast, offline, determinist
 uv run pytest -m cluster             # against a throwaway local cluster (kind or minikube); by hand
 uv run k8sholmes demo --question "Why is api restarting?"   # the demo environment and its offline investigator
 uv run k8sholmes investigate "…" --env demo               # an investigation from the command line
-uv run k8sholmes serve               # the web interface at http://127.0.0.1:8800/ (milestone 2)
+uv run k8sholmes serve               # the web interface at http://127.0.0.1:8800/ (sign in as demo / demo-password after `demo`)
 ```
 
 ## Layout
@@ -50,8 +50,10 @@ src/k8sholmes/
   knowledge.py                     knowledge notes and exceptions: scope, exact matching, expiry, revocation, revisions
   models.py                        the Model port, the OpenAI-compatible client, the capability tests, usage and secrets
   app.py  cli.py                   the composition root (home, store, auth, registry, engine, the demo); the command line
+  server.py  api.py  runner.py     the standard-library web server and static page; the JSON API (session, role and environment on every route); background runs and the event bus
+  page/                            the interface: index.html, tokens.css, app.css, app.js and views/*.js; no build step
   testing/                         FakeCluster, RecordedCluster, ScriptedModel, the contract checker, the demo cluster and the demo model
-  (planned)                        server.py, api.py, page/ (M2); reports.py, proposals.py, saved.py (M3)
+  (planned)                        reports.py, proposals.py, saved.py (M3)
 tests/unit|contract|integration|e2e   default suite; tests/cluster|hosted: by hand, marked
 design/                why and how: README, current.md, changes/, decisions.md, history/
 docs/  examples/       user docs and runnable examples, both executed by tests once they exist

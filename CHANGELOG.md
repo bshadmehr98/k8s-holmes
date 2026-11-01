@@ -12,6 +12,13 @@ design changed is in [`design/changes/`](design/changes/).
 
 ### Added
 
+- **Milestone 2: the web interface** ([0001](design/changes/0001-initial-design.md)). `k8sholmes serve`
+  runs the interface on the loopback interface: ask a question, watch the steps and calls arrive, read the
+  answer first and the findings with their evidence in an inspector, accept a finding as intentional,
+  follow up, cancel and resume; browse, scope and test capabilities and read their history; review, edit
+  and revoke exceptions and knowledge notes; administer environments, model endpoints (with the capability
+  tests), users and grants, retention and the audit log. Every API route checks the session, the role and
+  the environment; the first administrator is created from the one-time setup link the server prints.
 - **Milestone 1: the engine on records** ([0001](design/changes/0001-initial-design.md)). Investigations
   run from the command line against a Kubernetes environment (through `kubectl`, read-only) or the recorded
   demo: a model you bring (any OpenAI-compatible endpoint, tested for tool calling, streaming and structured
