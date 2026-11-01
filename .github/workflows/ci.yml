@@ -1,0 +1,46 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+permissions: { contents: read }
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: { python: ["3.11", "3.12", "3.13"] }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with: { python-version: "${{ matrix.python }}", enable-cache: true }
+      # Every extra and the dev dependency group (installed by default).
+      - run: uv sync --all-extras --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pyright
+      # Default suite only: pyproject's addopts deselect the cluster and hosted markers.
+      - run: uv run pytest --cov --cov-fail-under=90
+  build:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv build
+      - name: Smoke test the wheel in a clean env
+        run: |
+          uv venv "$RUNNER_TEMP/smoke"
+          # dependencies that are git sources (not on PyPI yet) are installed first
+          mapfile -t SOURCES < <(python3 scripts/git-sources.py)
+          if [ "${#SOURCES[@]}" -gt 0 ]; then uv pip install --python "$RUNNER_TEMP/smoke/bin/python" "${SOURCES[@]}"; fi
+          uv pip install --python "$RUNNER_TEMP/smoke/bin/python" dist/*.whl
+          "$RUNNER_TEMP/smoke/bin/python" -c "import k8sholmes; print(k8sholmes.__version__)"
+          if [ -f examples/quickstart.py ]; then   # the README quickstart, with only the wheel installed
+            cd "$RUNNER_TEMP" && "$RUNNER_TEMP/smoke/bin/python" "$GITHUB_WORKSPACE/examples/quickstart.py"
+          fi
+      - uses: actions/upload-artifact@v7
+        with: { name: dist, path: dist/ }
