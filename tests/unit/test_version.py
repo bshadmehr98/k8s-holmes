@@ -8,7 +8,7 @@ def test_version_is_semver() -> None:
 
 
 def test_errors_are_exported_and_typed() -> None:
-    assert issubclass(k8sholmes.ClusterUnreachable, k8sholmes.K8sHolmesError)
-    assert issubclass(k8sholmes.InvalidCase, k8sholmes.K8sHolmesError)
-    assert issubclass(k8sholmes.ToolMissing, k8sholmes.K8sHolmesError)
-    assert set(k8sholmes.__all__) >= {"K8sHolmesError", "ClusterUnreachable", "InvalidCase", "ToolMissing"}
+    for name in ("ClusterUnreachable", "PermissionRefused", "NotFound", "ModelFailure", "StoreVersionError"):
+        assert issubclass(getattr(k8sholmes, name), k8sholmes.K8sHolmesError)
+        assert name in k8sholmes.__all__
+    assert k8sholmes.ModelFailure("x", retryable=True).retryable
