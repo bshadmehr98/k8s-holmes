@@ -142,7 +142,8 @@ check it by hand before committing it.
 
 The hosted test (`-m hosted`, in `tests/hosted/`) runs one real model through the capability tests. It
 reads `K8SHOLMES_TEST_MODEL_URL` (an OpenAI-compatible base URL), `K8SHOLMES_TEST_MODEL` (the model name)
-and, when the endpoint wants one, `K8SHOLMES_TEST_MODEL_KEY`; a local llama.cpp or vLLM server needs no key.
+and, when the endpoint wants one, `K8SHOLMES_TEST_MODEL_KEY`; a local llama.cpp, vLLM or Ollama server
+needs no key (Ollama: `http://127.0.0.1:11434/v1` and a model such as `qwen3:8b`).
 It skips with a reason when they are unset.
 
 ## Changing the design
