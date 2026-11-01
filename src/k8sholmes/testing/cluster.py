@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from k8sholmes.cluster import canonical_kind
+from k8sholmes.cluster import canonical_kind, plural_of
 from k8sholmes.errors import InvalidInput, NotFound
 from k8sholmes.inventory import dig
 from k8sholmes.records import ResourceRef
@@ -282,7 +282,7 @@ class FakeCluster:
         self.calls.append(("api_resources", {}))
         if self._api_resources is not None:
             return list(self._api_resources)
-        return sorted({r["kind"].lower() + "s" for r in self.resources} | {"events", "nodes", "namespaces"})
+        return sorted({plural_of(r["kind"]) for r in self.resources} | {"events", "nodes", "namespaces"})
 
     # recordings (the layout `Kubectl(record=…)` writes)
 

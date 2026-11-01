@@ -260,6 +260,9 @@ def test_capability_tests_leave_a_reasoning_model_room_to_think(endpoint: record
     gives an empty reply and a false `failed` (found with qwen3:8b on Ollama)."""
     MODE["value"] = "thinking"
     results = run_capability_tests(OpenAICompatible(endpoint, "sk-test-key"))
+    budgets = [r["body"]["max_tokens"] for r in SEEN if r.get("body")]
+    # authentication, model, tool calling, streaming, structured, limits (connectivity lists the models)
+    assert budgets == [5, 1024, 1024, 1024, 1024, 16]
     assert {k: v.status for k, v in results.items()} == {
         "connectivity": "passed",
         "authentication": "passed",

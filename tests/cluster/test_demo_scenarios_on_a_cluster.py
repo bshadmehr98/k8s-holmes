@@ -10,6 +10,8 @@ condition citing evidence that exists, a limitation where the source cannot answ
 from __future__ import annotations
 
 import base64
+import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -148,3 +150,9 @@ def test_a_secret_is_read_by_name_only(world, shop: str) -> None:
     assert got.data["resource"]["data"] == "<never fetched>"
     blob = got.model_dump_json()
     assert planted not in blob and encoded not in blob
+    record = os.environ.get("K8SHOLMES_RECORD_TO")
+    if record:  # the raw recording that may be committed holds neither form either
+        for path in Path(record).rglob("*"):
+            if path.is_file():
+                text = path.read_text(errors="replace")
+                assert planted not in text and encoded not in text, path
