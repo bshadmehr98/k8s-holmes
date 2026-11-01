@@ -45,8 +45,34 @@ def test_roles_hold_and_actions_are_audited(served) -> None:
     bundle = demo.wait_idle(inv["id"])
     finding = bundle["findings"][0]
     evidence_id = bundle["evidence"][0]["id"]
+    report = demo.ok(
+        "POST",
+        "/api/reports",
+        {"environment_id": demo_env["id"], "kind": "investigation", "investigation_id": inv["id"]},
+    )["report"]
+    share = root.ok("POST", f"/api/reports/{report['id']}/shares", {"days": 1})
+    proposal = demo.ok(
+        "POST",
+        "/api/proposals",
+        {
+            "investigation_id": inv["id"],
+            "finding_ids": [finding["id"]],
+            "kind": "task",
+            "title": "t",
+            "change": "c",
+            "intended_effect": "e",
+            "verification_condition": finding["condition"],
+        },
+    )["proposal"]
+    saved = demo.ok(
+        "POST",
+        "/api/saved",
+        {"environment_id": demo_env["id"], "question": "Which important alerts are missing?"},
+    )["saved"]
     # the viewer reads and nothing more
     viewer = Client(base).sign_in("viewer", "a strong one")
+    assert viewer.ok("GET", f"/api/reports/{report['id']}")["report"]["id"] == report["id"]
+    assert viewer.ok("GET", f"/api/saved/{saved['id']}")["saved"]["id"] == saved["id"]
     assert viewer.ok("GET", f"/api/investigations/{inv['id']}")["investigation"]["id"] == inv["id"]
     writes = [
         ("POST", "/api/investigations", {"environment_id": demo_env["id"], "question": "x"}),
@@ -59,6 +85,33 @@ def test_roles_hold_and_actions_are_audited(served) -> None:
         ("POST", f"/api/environments/{demo_env['id']}/inventory", None),
         ("POST", "/api/capabilities/k8s.get/test", {"environment_id": demo_env["id"], "inputs": {}}),
         ("GET", f"/api/capabilities/k8s.get/calls?env={demo_env['id']}", None),
+        (
+            "POST",
+            "/api/reports",
+            {"environment_id": demo_env["id"], "kind": "investigation", "investigation_id": inv["id"]},
+        ),
+        ("POST", f"/api/reports/{report['id']}/edits", {"section": "The answer", "text": "x"}),
+        ("POST", f"/api/reports/{report['id']}/shares", {"days": 1}),
+        ("POST", f"/api/shares/{share['share']['id']}/revoke", None),
+        ("POST", f"/api/investigations/{inv['id']}/compare_models", {"endpoint_ids": ["mdl_demo"]}),
+        (
+            "POST",
+            "/api/proposals",
+            {
+                "investigation_id": inv["id"],
+                "finding_ids": [finding["id"]],
+                "kind": "task",
+                "title": "t",
+                "change": "c",
+                "intended_effect": "e",
+                "verification_condition": "x",
+            },
+        ),
+        ("PATCH", f"/api/proposals/{proposal['id']}", {"state": "rejected"}),
+        ("POST", f"/api/proposals/{proposal['id']}/verify", None),
+        ("POST", "/api/saved", {"environment_id": demo_env["id"], "question": "x"}),
+        ("PATCH", f"/api/saved/{saved['id']}", {"schedule": {"enabled": False}}),
+        ("POST", f"/api/saved/{saved['id']}/run", None),
     ]
     for method, path, body in writes:
         status, _ = viewer.call(method, path, body)
@@ -76,6 +129,34 @@ def test_roles_hold_and_actions_are_audited(served) -> None:
         ("GET", f"/api/capabilities?env={demo_env['id']}", None),
         ("PATCH", f"/api/findings/{finding['id']}", {"state": "acknowledged"}),
         ("POST", "/api/investigations", {"environment_id": demo_env["id"], "question": "x"}),
+        ("GET", f"/api/reports?env={demo_env['id']}", None),
+        ("GET", f"/api/reports/{report['id']}", None),
+        ("GET", f"/api/reports/{report['id']}/markdown", None),
+        ("GET", f"/api/reports/{report['id']}/export", None),
+        ("POST", f"/api/reports/{report['id']}/edits", {"section": "The answer", "text": "x"}),
+        ("POST", f"/api/shares/{share['share']['id']}/revoke", None),
+        ("GET", f"/api/investigations/{inv['id']}/live", None),
+        ("POST", f"/api/investigations/{inv['id']}/compare_models", {"endpoint_ids": ["mdl_demo"]}),
+        ("GET", f"/api/proposals?env={demo_env['id']}", None),
+        ("PATCH", f"/api/proposals/{proposal['id']}", {"state": "rejected"}),
+        ("POST", f"/api/proposals/{proposal['id']}/verify", None),
+        (
+            "POST",
+            "/api/proposals",
+            {
+                "investigation_id": inv["id"],
+                "finding_ids": [finding["id"]],
+                "kind": "task",
+                "title": "t",
+                "change": "c",
+                "intended_effect": "e",
+                "verification_condition": "x",
+            },
+        ),
+        ("GET", f"/api/saved?env={demo_env['id']}", None),
+        ("GET", f"/api/saved/{saved['id']}", None),
+        ("PATCH", f"/api/saved/{saved['id']}", {"schedule": {"enabled": False}}),
+        ("POST", f"/api/saved/{saved['id']}/run", None),
     ]
     for method, path, body in reads:
         status, _ = elsewhere.call(method, path, body)
@@ -104,6 +185,12 @@ def test_roles_hold_and_actions_are_audited(served) -> None:
         ("POST", "/api/environments", {"name": "n", "context": "c"}),
         ("PATCH", f"/api/environments/{demo_env['id']}/settings", {"probes_enabled": True}),
         ("PATCH", f"/api/environments/{demo_env['id']}/capabilities/k8s.get", {"enabled": False}),
+        (
+            "POST",
+            f"/api/reports/{report['id']}/shares",
+            {"days": 1},
+        ),  # shares are the administrator's (§14.1)
+        ("POST", f"/api/shares/{share['share']['id']}/revoke", None),
     ):
         status, _ = demo.call(method, path, body)
         assert status == 403, (method, path)
@@ -114,9 +201,26 @@ def test_roles_hold_and_actions_are_audited(served) -> None:
         ("DELETE", "/api/session", None),
         ("GET", "/api/models", None),
         ("PATCH", f"/api/findings/{finding['id']}", {"state": "acknowledged"}),
+        ("GET", f"/api/reports/{report['id']}", None),
+        ("GET", f"/api/reports/{report['id']}/markdown", None),
+        ("POST", f"/api/reports/{report['id']}/edits", None),
+        ("POST", f"/api/reports/{report['id']}/shares", None),
+        ("POST", f"/api/shares/{share['share']['id']}/revoke", None),
+        ("GET", f"/api/investigations/{inv['id']}/live", None),
+        ("POST", f"/api/investigations/{inv['id']}/compare_models", None),
+        ("GET", f"/api/proposals?env={demo_env['id']}", None),
+        ("POST", "/api/proposals", None),
+        ("PATCH", f"/api/proposals/{proposal['id']}", None),
+        ("POST", f"/api/proposals/{proposal['id']}/verify", None),
+        ("GET", f"/api/saved?env={demo_env['id']}", None),
+        ("POST", "/api/saved", None),
+        ("GET", f"/api/saved/{saved['id']}", None),
+        ("POST", f"/api/saved/{saved['id']}/run", None),
     ):
         status, _ = anonymous.call(method, path, body)
         assert status == 401, (method, path)
+    # the one route that answers without a session opens one report and nothing else
+    assert anonymous.ok("GET", f"/api/shared/{share['token']}")["report"]["id"] == report["id"]
     # the administrator reads every environment
     assert root.ok("GET", f"/api/investigations/{inv['id']}")["investigation"]["id"] == inv["id"]
     assert {e["name"] for e in root.ok("GET", "/api/environments")["environments"]} == {"demo", "second"}

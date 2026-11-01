@@ -152,10 +152,10 @@ def _investigate(app: App, args: argparse.Namespace) -> int:
         app.engine.on_event = _print_event
     inv = app.engine.run(inv.id, user)
     if args.json:
-        print(json.dumps(investigation_json(app, inv), indent=1, default=str))
+        print(json.dumps(investigation_json(app.store, inv), indent=1, default=str))
     else:
         print()
-        print(report_text(app, inv))
+        print(report_text(app.store, inv))
     return 0 if inv.status in ("completed", "partial") else 1
 
 
@@ -182,7 +182,7 @@ def _demo(app: App, args: argparse.Namespace) -> int:
         app.engine.on_event = _print_event
         inv = app.engine.run(inv.id, user)
         print()
-        print(report_text(app, inv))
+        print(report_text(app.store, inv))
         return 0 if inv.status in ("completed", "partial") else 1
     print('try: k8sholmes investigate "Why is api restarting?" --env demo')
     return 0
@@ -192,8 +192,8 @@ def _export(app: App, args: argparse.Namespace) -> int:
     inv = app.store.get(Investigation, args.investigation_id)
     out: Path = args.out
     (out / "evidence").mkdir(parents=True, exist_ok=True)
-    (out / "report.md").write_text(report_text(app, inv))
-    payload = {"format_version": "1", **investigation_json(app, inv)}
+    (out / "report.md").write_text(report_text(app.store, inv))
+    payload = {"format_version": "1", **investigation_json(app.store, inv)}
     (out / "report.json").write_text(json.dumps(payload, indent=1, default=str))
     for ev in app.store.find(Evidence, {"investigation_id": inv.id}):
         (out / "evidence" / f"{ev.id}.json").write_text(

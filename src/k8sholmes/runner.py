@@ -19,14 +19,16 @@ from k8sholmes.records import Investigation, User
 
 log = logging.getLogger("k8sholmes")
 Event = tuple[str, dict[str, Any]]
+Finished = Callable[[Investigation, str], None]  # the finished investigation and "run" or "follow_up"
 
 
 class Runner:
     """Runs `engine.run` and `engine.follow_up` in threads, one at a time per investigation, and fans the
     engine's events out to subscribers."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, *, on_finished: Finished | None = None) -> None:
         self.engine = engine
+        self.on_finished = on_finished  # called in the run's thread after it ends: (investigation, kind)
         self.engine.on_event = self.publish
         self._lock = threading.Lock()
         self._running: dict[str, threading.Thread] = {}
@@ -73,14 +75,19 @@ class Runner:
         if key:
             with self._lock:
                 self._keys[key] = investigation_id
-        self._spawn(investigation_id, lambda: self.engine.run(investigation_id, user), key)
+        self._spawn(investigation_id, lambda: self.engine.run(investigation_id, user), key, "run")
 
     def follow_up(self, investigation_id: str, user: User, message: str) -> None:
         """A follow-up in the background; while the investigation runs, the message is a redirect."""
         if self.is_running(investigation_id):
             self.engine.follow_up(investigation_id, user, message)
             return
-        self._spawn(investigation_id, lambda: self.engine.follow_up(investigation_id, user, message), None)
+        self._spawn(
+            investigation_id,
+            lambda: self.engine.follow_up(investigation_id, user, message),
+            None,
+            "follow_up",
+        )
 
     def wait(self, investigation_id: str, timeout: float | None = None) -> None:
         """Block until the investigation's thread ends (tests and the command line)."""
@@ -89,7 +96,9 @@ class Runner:
         if thread is not None:
             thread.join(timeout)
 
-    def _spawn(self, investigation_id: str, target: Callable[[], Investigation], key: str | None) -> None:
+    def _spawn(
+        self, investigation_id: str, target: Callable[[], Investigation], key: str | None, kind: str
+    ) -> None:
         with self._lock:
             live = self._running.get(investigation_id)
             if live is not None and live.is_alive():
@@ -97,7 +106,9 @@ class Runner:
 
             def work() -> None:
                 try:
-                    target()
+                    finished = target()
+                    if self.on_finished is not None:
+                        self.on_finished(finished, kind)
                 except Exception as exc:
                     log.exception("investigation %s failed in the background", investigation_id)
                     self._leave_failed(investigation_id, f"{type(exc).__name__}: {exc}")

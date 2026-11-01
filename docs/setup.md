@@ -32,9 +32,18 @@ cannot be chosen for investigations. Passing tests do not prove the model invest
 
 ## Users and roles
 
-`viewer` reads; `investigator` runs inspect capabilities, edits findings, writes knowledge and accepts
-exceptions; `operator` also runs probes and, later, proposals and verifications; an administrator does
-everything, including Settings. Roles are granted per environment.
+`viewer` reads; `investigator` runs inspect capabilities, edits findings, writes knowledge, accepts
+exceptions, generates and edits reports, proposes improvements and saves investigations; `operator` also
+runs probes, approves proposals, marks them applied and verifies them; an administrator does everything,
+including Settings and the view-only share links of reports. Roles are granted per environment.
+
+## Schedules and notifications
+
+Saved investigations run on a schedule only while `k8sholmes serve` runs: its scheduler thread checks every
+minute. A saved investigation can notify a webhook; the URL is read from an environment variable of the
+server process that you name in the saved investigation (for example `K8SHOLMES_HOOK_SHOP`), is never
+stored, and must be `http(s)`. The payload is the run's summary and a link, never evidence. The same thread
+runs the retention purge once a day (Settings → Retention sets the days per environment).
 
 ## The demo
 

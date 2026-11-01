@@ -21,7 +21,7 @@ from k8sholmes.records import Record
 
 R = TypeVar("R", bound=Record)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: reports, shares, proposals, saved investigations (milestone 3)
 
 # table -> (record class, indexed columns copied from the record)
 TABLES: dict[str, tuple[type[Record], tuple[str, ...]]] = {
@@ -46,6 +46,10 @@ TABLES: dict[str, tuple[type[Record], tuple[str, ...]]] = {
     "knowledge": (records.Knowledge, ("environment_id", "kind", "created_at")),
     "model_endpoints": (records.ModelEndpoint, ("name", "is_default")),
     "model_calls": (records.ModelCall, ("investigation_id", "endpoint_id", "at")),
+    "reports": (records.Report, ("environment_id", "kind", "subject_id", "revision", "generated_at")),
+    "shares": (records.Share, ("report_id", "environment_id", "token_hash", "created_at", "expires_at")),
+    "proposals": (records.Proposal, ("environment_id", "investigation_id", "state", "created_at")),
+    "saved_investigations": (records.SavedInvestigation, ("environment_id", "created_at")),
 }
 
 

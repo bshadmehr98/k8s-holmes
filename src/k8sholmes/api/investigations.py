@@ -139,7 +139,7 @@ def follow_up(api: Api, req: Request, params: dict[str, str]) -> Response:
 @route("GET", "/api/investigations/(?P<id>[^/]+)/report")
 def report(api: Api, req: Request, params: dict[str, str]) -> Response:
     _, inv, _ = _investigation(api, req, params["id"], "viewer")
-    return Response(200, report_text(api.app, inv), content_type="text/markdown; charset=utf-8")
+    return Response(200, report_text(api.app.store, inv), content_type="text/markdown; charset=utf-8")
 
 
 @route("GET", "/api/investigations/(?P<id>[^/]+)/export")
@@ -148,7 +148,7 @@ def export(api: Api, req: Request, params: dict[str, str]) -> Response:
     api.app.auth.audit(
         user.id, "export", environment_id=inv.environment_id, subject=f"investigation:{inv.id}"
     )
-    payload = {"format_version": "1", **investigation_json(api.app, inv)}
+    payload = {"format_version": "1", **investigation_json(api.app.store, inv)}
     return Response(200, payload, headers={"Content-Disposition": f'attachment; filename="{inv.id}.json"'})
 
 

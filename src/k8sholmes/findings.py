@@ -249,15 +249,36 @@ def _merge(earlier: Finding, candidate: Finding, author: str) -> Finding:
 
 
 def set_state(store: Store, finding: Finding, state: FindingState, *, author: str, note: str = "") -> Finding:
+    """A person moves a finding along TRANSITIONS (design §8.2)."""
     if state not in TRANSITIONS[finding.state]:
         raise InvestigationStateError(f"a finding cannot go from {finding.state} to {state}")
+    return _transition(store, finding, state, author=author, note=note)
+
+
+def mark_verified(store: Store, finding: Finding, *, author: str, note: str) -> Finding:
+    """A verification observed the condition absent: `verified` from any state but accepted risk (§11.2)."""
+    if finding.state in ("verified", "accepted_risk"):
+        return finding
+    return _transition(store, finding, "verified", author=author, note=note)
+
+
+def _transition(store: Store, finding: Finding, state: FindingState, *, author: str, note: str) -> Finding:
     change = f"state {finding.state} -> {state}" + (f": {note}" if note else "")
     revision = Revision(at=now(), author=author, change=change, before={"state": finding.state})
     updated = finding.model_copy(
         update={"state": state, "updated_at": now(), "revisions": [*finding.revisions, revision]}
     )
     store.put(updated)
+    if state != "open":
+        pin_evidence(store, updated)
     return updated
+
+
+def pin_evidence(store: Store, finding: Finding) -> None:
+    """A reviewed finding's evidence outlives the retention policy (design §7.1, §16.3)."""
+    for ev in store.get_many(Evidence, [*finding.evidence_for, *finding.evidence_against]):
+        if ev.retention != "pinned":
+            store.put(ev.model_copy(update={"retention": "pinned"}))
 
 
 def revise(store: Store, finding: Finding, *, author: str, change: str, **updates: Any) -> Finding:

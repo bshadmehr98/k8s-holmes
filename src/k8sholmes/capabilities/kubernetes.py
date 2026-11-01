@@ -563,6 +563,7 @@ CAPABILITIES: list[Capability] = [
         run=run_logs,
         permissions=(("get", "pods/log"),),
         coverage=("observed", "no_data"),
+        retention="short",
         purpose="The tail of a container's log, current or the previous (crashed) one, since a time or not.",
     ),
     INSPECT(
@@ -610,6 +611,7 @@ CAPABILITIES: list[Capability] = [
         run=run_top,
         permissions=(("list", "pods.metrics.k8s.io"),),
         coverage=("observed", "cannot_answer"),
+        retention="short",
         purpose="Current CPU and memory of pods or nodes from the metrics server, when one exists.",
     ),
 ]

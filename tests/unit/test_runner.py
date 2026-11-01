@@ -67,3 +67,29 @@ def test_a_failing_background_run_is_logged_not_raised(tmp_path: Path, caplog) -
     assert "failed in the background" in caplog.text
     assert threading.active_count() >= 1
     time.sleep(0)
+
+
+def test_the_finished_hook_sees_the_run_and_its_kind_and_a_failing_hook_leaves_the_run_failed(
+    tmp_path: Path, caplog
+) -> None:
+    app = App.open(tmp_path / "home", extensions=False)
+    env, user = app.setup_demo()
+    seen: list[tuple[str, str, str]] = []
+    runner = Runner(app.engine, on_finished=lambda inv, kind: seen.append((inv.id, inv.status, kind)))
+    inv = app.engine.start(environment=env, question="Why is api restarting?", user=user)
+    runner.run(inv.id, user)
+    runner.wait(inv.id, timeout=30)
+    assert seen == [(inv.id, "completed", "run")]
+    runner.follow_up(inv.id, user, "and the worker?")
+    runner.wait(inv.id, timeout=30)
+    assert seen[-1][0] == inv.id and seen[-1][2] == "follow_up"
+
+    def boom(finished: Investigation, kind: str) -> None:
+        raise RuntimeError("the hook broke")
+
+    runner.on_finished = boom
+    second = app.engine.start(environment=env, question="Why is api restarting?", user=user)
+    runner.run(second.id, user)
+    runner.wait(second.id, timeout=30)
+    assert app.store.get(Investigation, second.id).status == "completed"  # the run itself was fine
+    assert "the hook broke" in caplog.text  # the hook's failure is logged, never hidden

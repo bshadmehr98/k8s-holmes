@@ -6,6 +6,8 @@ import { renderInvestigation } from "./views/investigation.js";
 import { renderCapabilities } from "./views/capabilities.js";
 import { renderKnowledge } from "./views/knowledge.js";
 import { renderSettings } from "./views/settings.js";
+import { renderReports, renderShared } from "./views/reports.js";
+import { renderSaved } from "./views/saved.js";
 import { api, el, state, toast } from "./views/common.js";
 
 const ROUTES = [
@@ -13,10 +15,13 @@ const ROUTES = [
   { path: /^\/investigations$/, view: renderInvestigations, nav: "Investigations" },
   { path: /^\/investigations\/([a-z0-9_]+)$/, view: renderInvestigation, nav: "Investigations" },
   { path: /^\/capabilities$/, view: renderCapabilities, nav: "Capabilities" },
+  { path: /^\/reports$/, view: renderReports, nav: "Reports" },
+  { path: /^\/reports\/([a-z0-9_]+)$/, view: renderReports, nav: "Reports" },
+  { path: /^\/saved\/([a-z0-9_]+)$/, view: renderSaved, nav: "Investigations" },
   { path: /^\/knowledge$/, view: renderKnowledge, nav: "Knowledge" },
   { path: /^\/settings(?:\/([a-z]+))?$/, view: renderSettings, nav: "Settings" },
 ];
-const NAV = [["Investigate", "#/"], ["Investigations", "#/investigations"], ["Capabilities", "#/capabilities"], ["Knowledge", "#/knowledge"]];
+const NAV = [["Investigate", "#/"], ["Investigations", "#/investigations"], ["Capabilities", "#/capabilities"], ["Reports", "#/reports"], ["Knowledge", "#/knowledge"]];
 
 function renderNav(current) {
   const nav = document.getElementById("nav");
@@ -48,6 +53,8 @@ export async function route() {
   const main = document.getElementById("main");
   const hash = location.hash.replace(/^#/, "") || "/";
   main.replaceChildren(el("div", { class: "state" }, "Loading…"));
+  const shared = hash.match(/^\/shared\/([A-Za-z0-9_-]+)$/);
+  if (shared) { renderNav(""); document.title = "Shared report · K8sHolmes"; return renderShared(main, shared[1]); }  // a view-only link needs no session
   try {
     if (state.me === undefined) {
       const me = await api("GET", "/api/me");

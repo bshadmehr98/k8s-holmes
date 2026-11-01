@@ -45,7 +45,8 @@ def is_active(exception: AcceptedException, at: datetime | None = None) -> bool:
     return exception.revoked_at is None and (exception.expires_at is None or exception.expires_at > at)
 
 
-def _covers(exception: AcceptedException, ref: ResourceRef) -> bool:
+def covers(exception: AcceptedException, ref: ResourceRef) -> bool:
+    """Whether an exception's scope covers this resource: the one matching rule (design §9.1)."""
     scope = exception.scope
     if scope.kind.lower() != ref.kind.lower() or scope.namespace != ref.namespace:
         return False
@@ -65,7 +66,7 @@ def matching_exception(
     for exc in exceptions:
         if exc.environment_id != finding.environment_id or exc.condition != finding.condition:
             continue
-        if not finding.resources or not all(_covers(exc, r) for r in finding.resources):
+        if not finding.resources or not all(covers(exc, r) for r in finding.resources):
             continue
         if is_active(exc, at):
             return exc, None

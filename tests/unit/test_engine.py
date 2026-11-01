@@ -588,3 +588,38 @@ def test_a_follow_up_during_a_run_is_a_redirect(tmp_path: Path) -> None:
     assert messages[-1].content == "look at the worker too" and messages[-1].round == 0
     with pytest.raises(InvestigationStateError):
         world.engine.resume(inv.id, world.user)  # running is not resumable
+
+
+def test_conclude_only_judges_another_model_on_the_stored_evidence_and_stores_nothing(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    inv = world.investigate(script=conclusion_script(world))
+    before = (len(world.findings(inv)), world.store.count(records.Step), world.store.count(records.Message))
+    other = ScriptedModel(script=conclusion_script(world, invent_evidence=True))
+    other.name = "other-model"
+    validated, reply = world.engine.conclude_only(inv, other, world.user)
+    assert validated.problems and "does not exist" in " ".join(validated.problems)
+    assert validated.findings == []  # the invented citation keeps the finding out, as in a real run
+    assert reply.prompt_tokens >= 0
+    model_calls = world.store.find(records.ModelCall, {"investigation_id": inv.id})
+    comparison_calls = [m for m in model_calls if m.phase == "comparison"]
+    assert len(comparison_calls) == 1 and comparison_calls[0].model == "other-model"
+    after = (len(world.findings(inv)), world.store.count(records.Step), world.store.count(records.Message))
+    assert after == before  # nothing stored for the investigation itself
+    untouched = world.store.get(records.Investigation, inv.id)
+    assert untouched.model_name != "other-model" and untouched.usage == inv.usage
+    failed_calls = [
+        m for m in world.store.find(records.ModelCall, {"investigation_id": inv.id}) if m.status == "failed"
+    ]
+    assert failed_calls == []
+    good = ScriptedModel(script=conclusion_script(world))
+    validated, _ = world.engine.conclude_only(inv, good, world.user)
+    assert not validated.problems and len(validated.findings) == 1
+    with pytest.raises(PermissionRefused):
+        world.engine.conclude_only(inv, good, world.viewer)
+    failing = ScriptedModel(script=lambda *a: (_ for _ in ()).throw(ModelFailure("down", retryable=False)))
+    with pytest.raises(ModelFailure):
+        world.engine.conclude_only(inv, failing, world.user)
+    recorded = [
+        m for m in world.store.find(records.ModelCall, {"investigation_id": inv.id}) if m.status == "failed"
+    ]
+    assert len(recorded) == 1 and recorded[0].phase == "comparison"
