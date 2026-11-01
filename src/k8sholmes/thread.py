@@ -178,28 +178,49 @@ def messages_for(
     return messages
 
 
+def _size(data: Any) -> int:
+    return len(json.dumps(data, default=str))
+
+
 def shrink(data: Any, limit: int) -> Any:
-    """Data small enough for a model message: the largest values of a dict go first, lists lose their tail."""
-    if len(json.dumps(data, default=str)) <= limit:
+    """Data small enough for a model message, keeping its shape: the largest value of a dict is cut first
+    (recursively, so the head of a long list stays readable), lists lose their tail, text its end."""
+    if _size(data) <= limit:
         return data
     if isinstance(data, dict):
-        shrunk = dict(cast(dict[str, Any], data))
-        while len(json.dumps(shrunk, default=str)) > limit and shrunk:
-            key = max(shrunk, key=lambda k: len(json.dumps(shrunk[k], default=str)))
-            value = shrunk[key]
+        return _shrink_dict(cast(dict[str, Any], data), limit)
+    if isinstance(data, list):
+        return _shrink_list(cast(list[Any], data), limit)
+    text = data if isinstance(data, str) else json.dumps(data, default=str)
+    keep = max(0, limit - 80)
+    return text[:keep] + f"… [{len(text) - keep} more characters; the full record is stored as evidence]"
+
+
+def _shrink_dict(data: dict[str, Any], limit: int) -> dict[str, Any]:
+    shrunk = dict(data)
+    done: set[str] = set()
+    while _size(shrunk) > limit and len(done) < len(shrunk):
+        key = max((k for k in shrunk if k not in done), key=lambda k: _size(shrunk[k]))
+        done.add(key)
+        value = shrunk[key]
+        room = limit - _size({k: v for k, v in shrunk.items() if k != key}) - len(key) - 6
+        smaller = shrink(value, room) if room > 200 else None
+        if smaller is not None and _size(smaller) <= room:
+            shrunk[key] = smaller
+        else:
             size = len(value) if isinstance(value, list | dict | str) else 1  # type: ignore[arg-type]
             shrunk[key] = f"<{size} entries omitted for size; the full record is stored as evidence>"
-        return shrunk
-    if isinstance(data, list):
-        items = list(cast(list[Any], data))
-        while len(json.dumps(items, default=str)) > limit and len(items) > 1:
-            items = items[: max(1, len(items) // 2)]
-        return [
-            *items,
-            f"<{len(cast(list[Any], data)) - len(items)} more items omitted; the full record is evidence>",
-        ]
-    text = json.dumps(data, default=str)
-    return text[:limit] + f"… [{len(text) - limit} more characters; the full record is stored as evidence]"
+    return shrunk
+
+
+def _shrink_list(data: list[Any], limit: int) -> list[Any]:
+    items = list(data)
+    while _size(items) + 90 > limit and len(items) > 1:
+        items = items[: max(1, len(items) // 2)]
+    if items and _size(items) + 90 > limit:
+        items = [shrink(items[0], limit - 100)]
+    omitted = len(data) - len(items)
+    return [*items, f"<{omitted} more items omitted; the full record is evidence>"] if omitted else items
 
 
 def tool_message(call: Call, evidence: Evidence | None) -> str:

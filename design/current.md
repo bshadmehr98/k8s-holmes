@@ -779,7 +779,8 @@ evidence, recording with `K8SHOLMES_RECORD_TO`; the hosted test (`tests/hosted/`
 real OpenAI-compatible endpoint through the capability tests of §13.2; the user documentation (setup, the
 command line, capabilities, extensions, records and exports, privacy, the demo) and four runnable examples,
 all executed by the default suite. Guarantees 1 to 24 are tested on the recording; the cluster suite runs
-the five scenarios and the Secret check on a real cluster, by hand.
+the five scenarios and the Secret check on a real cluster, by hand (first run on kind v0.29.0,
+Kubernetes 1.33.1, 2026-11-02: 6 passed).
 
 **Planned:** nothing before 0.1.0 is released; what comes after is a new change record.
 

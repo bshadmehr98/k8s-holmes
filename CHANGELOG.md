@@ -13,6 +13,10 @@ design changed is in [`design/changes/`](design/changes/).
   the permission matrix (D-022).
 - The model capability tests give a reasoning model (qwen3, deepseek-r1, gpt-oss) 1024 tokens to answer,
   so its thinking no longer reads as an empty reply and a false `failed` (D-023; found with qwen3:8b).
+- A result too large for a model message keeps its shape: the largest value is cut (the head of a long
+  list stays readable) instead of being replaced whole, and cutting always ends; before, a dict of many
+  medium values could loop forever, and a Deployment mid-rollout on a real cluster reached the model
+  with its pods list omitted. Found by the first run of the cluster suite.
 
 ### Removed
 
