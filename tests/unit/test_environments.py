@@ -1,0 +1,73 @@
+from pathlib import Path
+
+import pytest
+
+from k8sholmes import records
+from k8sholmes.environments import (
+    PERMISSION_CHECKS,
+    cluster_for,
+    connect,
+    create_environment,
+    latest_inventory,
+    take_inventory,
+)
+from k8sholmes.errors import ClusterUnreachable, InvalidInput
+from k8sholmes.store import Store
+from k8sholmes.testing import FakeCluster
+
+
+def test_create_and_connect_builds_the_matrix(tmp_path: Path) -> None:
+    store = Store(tmp_path / "db")
+    env = create_environment(store, name="dev", context="kind-dev")
+    with pytest.raises(InvalidInput, match="exists"):
+        create_environment(store, name="dev", context="x")
+    with pytest.raises(InvalidInput, match="needs a name"):
+        create_environment(store, name=" ", context="x")
+    cluster = FakeCluster(
+        [{"kind": "Pod", "metadata": {"name": "p", "namespace": "shop"}}],
+        can_i={"list secrets *": False, "list nodes *": False},
+        api_resources=["pods", "deployments.apps", "events", "nodes", "secrets"],
+    )
+    env = connect(store, env, cluster)
+    assert env.permissions["list pods"] is True
+    assert env.permissions["list secrets"] is False
+    assert env.permissions["list nodes"] is False
+    assert env.permissions["list prometheusrules"] is False  # the CRD is not installed
+    assert env.permissions["get pods/log"] is True
+    assert env.server_version == "v1.36.0"
+    assert env.connected_at is not None
+    assert set(env.permissions) == {f"{v} {k}" for v, k in PERMISSION_CHECKS}
+    assert store.get(records.Environment, env.id).permissions == env.permissions
+
+
+def test_connect_failure_is_typed(tmp_path: Path) -> None:
+    store = Store(tmp_path / "db")
+    env = create_environment(store, name="dev", context="kind-dev")
+
+    class Down(FakeCluster):
+        def version(self):  # type: ignore[override]
+            raise ClusterUnreachable("refused")
+
+    with pytest.raises(ClusterUnreachable, match="could not be reached: refused"):
+        connect(store, env, Down())
+
+
+def test_cluster_for_a_recording(tmp_path: Path) -> None:
+    FakeCluster([{"kind": "Pod", "metadata": {"name": "p", "namespace": "a"}}], context="rec").save(
+        tmp_path / "rec"
+    )
+    env = records.Environment(name="demo", context="demo", recording=str(tmp_path / "rec"))
+    assert cluster_for(env).context == "rec"
+    assert cluster_for(records.Environment(name="real", context="kind-dev")).context == "kind-dev"
+
+
+def test_latest_inventory(tmp_path: Path) -> None:
+    store = Store(tmp_path / "db")
+    env = records.Environment(name="dev", context="c")
+    assert latest_inventory(store, env.id) is None
+    first = take_inventory(store, env, FakeCluster(), [])
+    second = take_inventory(store, env, FakeCluster(), [])
+    latest = latest_inventory(store, env.id)
+    assert latest is not None
+    assert latest.id in (first.id, second.id)
+    assert latest.taken_at >= first.taken_at
