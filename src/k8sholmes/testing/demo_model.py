@@ -30,6 +30,14 @@ KIND_WORDS: tuple[tuple[Kind, tuple[str, ...]], ...] = (
 )
 
 
+def _rows(value: Any) -> list[dict[str, Any]]:
+    """The records of a list the model was shown; a list cut to size ends with a note, which is skipped,
+    and a value cut away entirely is a note, so there are no rows."""
+    if not isinstance(value, list):
+        return []
+    return [cast(dict[str, Any], v) for v in cast(list[Any], value) if isinstance(v, dict)]
+
+
 def _classify(question: str) -> Kind:
     q = question.lower()
     for kind, words in KIND_WORDS:
@@ -281,7 +289,7 @@ class DemoModel:
                 ["the health result was truncated for the model"],
                 [],
             )
-        pods = cast(list[dict[str, Any]], data.get("pods") or [])
+        pods = _rows(data.get("pods"))
         ref = [{"kind": "Deployment", "namespace": "shop", "name": name}]
         oom = [
             (p, s)
@@ -415,7 +423,7 @@ class DemoModel:
         data = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
         by_basis: dict[str, list[str]] = {"defined": [], "observed": [], "inferred": []}
         relationships = data.get("relationships")
-        for r in cast(list[dict[str, Any]], relationships if isinstance(relationships, list) else []):
+        for r in _rows(relationships):
             target = cast(dict[str, Any], r.get("target") or {})
             if target.get("kind") == "Service" and target.get("name") == name and r.get("kind") != "owns":
                 source = cast(dict[str, Any], r.get("source") or {})
@@ -444,7 +452,7 @@ class DemoModel:
         data = cast(dict[str, Any], exposure.get("data") or {})
         ev = [str(exposure["evidence_id"])]
         findings: list[dict[str, Any]] = []
-        for svc in cast(list[dict[str, Any]], data.get("exposed_services") or []):
+        for svc in _rows(data.get("exposed_services")):
             name = str(svc["service"]).split("/")[-1]
             findings.append(
                 self._finding(
@@ -513,7 +521,7 @@ class DemoModel:
         data = cast(dict[str, Any], safeguards.get("data") or {})
         ev = [str(safeguards["evidence_id"])]
         findings: list[dict[str, Any]] = []
-        for row in cast(list[dict[str, Any]], data.get("workloads") or []):
+        for row in _rows(data.get("workloads")):
             kind, name = str(row["workload"]).split("/")[0], str(row["workload"]).split("/")[-1]
             ref = [{"kind": kind, "namespace": "shop", "name": name}]
             if kind != "DaemonSet" and (row.get("replicas") or 0) <= 1:
@@ -551,7 +559,7 @@ class DemoModel:
 
     def _from_changes(self, changes: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         data = cast(dict[str, Any], changes.get("data") or {})
-        items = cast(list[dict[str, Any]], data.get("changes") or [])
+        items = _rows(data.get("changes"))
         revisions = [c for c in items if c.get("kind") == "revision"]
         findings = [
             self._finding(

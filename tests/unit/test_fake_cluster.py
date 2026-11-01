@@ -126,3 +126,13 @@ def test_save_and_replay_recording(cluster: FakeCluster, tmp_path: Path) -> None
 
 def test_contract(cluster: FakeCluster) -> None:
     check_cluster(cluster, namespace="shop", secret_name="db")
+
+
+def test_default_api_resources_use_the_real_plurals() -> None:
+    fake = FakeCluster(
+        [
+            {"kind": "NetworkPolicy", "metadata": {"name": "n", "namespace": "a"}},
+            {"kind": "Ingress", "metadata": {"name": "i", "namespace": "a"}},
+        ]
+    )
+    assert {"networkpolicies", "ingresses"} <= set(fake.api_resources())

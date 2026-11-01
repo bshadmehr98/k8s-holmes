@@ -31,11 +31,15 @@ def test_create_and_connect_builds_the_matrix(tmp_path: Path) -> None:
     assert env.permissions["list pods"] is True
     assert env.permissions["list secrets"] is False
     assert env.permissions["list nodes"] is False
-    assert env.permissions["list prometheusrules"] is False  # the CRD is not installed
+    assert "list prometheusrules" not in env.permissions  # the CRD is not installed: nothing to refuse
     assert env.permissions["get pods/log"] is True
     assert env.server_version == "v1.36.0"
     assert env.connected_at is not None
-    assert set(env.permissions) == {f"{v} {k}" for v, k in PERMISSION_CHECKS}
+    served = {"pods", "deployments", "events", "nodes", "secrets"}
+    always = {"pods/log", "pods.metrics.k8s.io", "nodes.metrics.k8s.io"}
+    expected = {f"{v} {k}" for v, k in PERMISSION_CHECKS if k in served | always}
+    assert set(env.permissions) == expected
+    assert "list servicemonitors" not in env.permissions
     assert store.get(records.Environment, env.id).permissions == env.permissions
 
 

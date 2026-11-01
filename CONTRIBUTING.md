@@ -130,12 +130,21 @@ entry points, event buses and dependency-injection containers.
 ### Cluster tests
 
 The cluster tests (`-m cluster`, in `tests/cluster/`) apply the manifests in `tests/cluster/manifests/`
-to a fresh namespace of a **throwaway** local cluster (kind or minikube), run the demo scenarios' questions
-against it, and delete the namespace. `KUBECONFIG` and `K8SHOLMES_TEST_CONTEXT` choose the cluster; a test refuses a context whose
-name does not contain `kind-` or `minikube` unless `K8SHOLMES_TEST_ALLOW_CONTEXT=1`, because the
+once to a namespace named `shop` (the demo investigator's) of a **throwaway** local cluster (kind or
+minikube), run the demo scenarios' questions against it, and delete the namespace; they skip when `shop`
+already exists. The OOM wait takes a few minutes, so the module's timeout is 900 s. `KUBECONFIG` and `K8SHOLMES_TEST_CONTEXT` choose the cluster; a test refuses a context whose
+name does not start with `kind-` or `minikube` unless `K8SHOLMES_TEST_ALLOW_CONTEXT=1`, because the
 manifests break things on purpose. They skip with a reason when `kubectl` or the cluster is missing. A
 check's evidence gathering is proven on the real cluster once and then recorded for the default suite
-(the `real-cluster-tests` skill in `.claude/skills/` says how).
+(the `real-cluster-tests` skill in `.claude/skills/` says how). A recording made with
+`K8SHOLMES_RECORD_TO` holds the raw replies (the redactor runs on evidence, not on the recording), so
+check it by hand before committing it.
+
+The hosted test (`-m hosted`, in `tests/hosted/`) runs one real model through the capability tests. It
+reads `K8SHOLMES_TEST_MODEL_URL` (an OpenAI-compatible base URL), `K8SHOLMES_TEST_MODEL` (the model name)
+and, when the endpoint wants one, `K8SHOLMES_TEST_MODEL_KEY`; a local llama.cpp, vLLM or Ollama server
+needs no key (Ollama: `http://127.0.0.1:11434/v1` and a model such as `qwen3:8b`).
+It skips with a reason when they are unset.
 
 ## Changing the design
 

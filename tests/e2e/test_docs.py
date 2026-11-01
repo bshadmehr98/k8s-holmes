@@ -50,3 +50,11 @@ def test_relative_links_resolve(page: Path) -> None:
         if path and not (page.parent / path).exists():
             missing.append(target)
     assert not missing, f"{page.relative_to(ROOT)} links to files that don't exist: {missing}"
+
+
+def test_the_capabilities_page_lists_every_built_in() -> None:
+    from k8sholmes.capabilities.builtin import builtin_registry
+
+    page = (ROOT / "docs" / "capabilities.md").read_text()
+    missing = [cap.id for cap in builtin_registry(extensions=False).all() if f"`{cap.id}`" not in page]
+    assert not missing, f"docs/capabilities.md does not list {missing}"

@@ -46,6 +46,9 @@ PERMISSION_CHECKS: tuple[tuple[str, str], ...] = (
     ("list", "nodes.metrics.k8s.io"),
 )
 
+# subresources and aggregated APIs that `api-resources` does not list under their own name
+ALWAYS_CHECKED = ("pods/log", "pods.metrics.k8s.io", "nodes.metrics.k8s.io")
+
 
 def create_environment(
     store: Store, *, name: str, context: str, kubeconfig: str | None = None, recording: str | None = None
@@ -71,10 +74,9 @@ def connect(store: Store, environment: Environment, cluster: Cluster) -> Environ
     kinds = {k.split(".")[0] for k in cluster.api_resources()}
     matrix: dict[str, bool] = {}
     for verb, kind in PERMISSION_CHECKS:
-        plain = kind.split(".")[0].split("/")[0]
-        if plain not in kinds and kind not in ("pods/log", "pods.metrics.k8s.io", "nodes.metrics.k8s.io"):
-            matrix[f"{verb} {kind}"] = False  # the kind does not exist here (a CRD that is not installed)
-            continue
+        served = kind.split(".")[0].split("/")[0] in kinds or kind in ALWAYS_CHECKED
+        if not served:
+            continue  # a CRD that is not installed: nothing to refuse; it says cannot_answer (D-022)
         try:
             matrix[f"{verb} {kind}"] = bool(cluster.can_i(verb, kind))
         except (ClusterUnreachable, PermissionRefused, NotFound):

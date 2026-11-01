@@ -203,6 +203,59 @@ def test_alert_rules_and_their_absence(world) -> None:
     assert none.coverage == "cannot_answer"
 
 
+def test_alert_rules_on_a_cluster_without_the_crd_is_cannot_answer_not_refused(tmp_path: Path) -> None:
+    """Design §5.1: an absent CRD is a source that cannot answer, not a permission the gate refuses."""
+    store = Store(tmp_path / "k8sholmes.db")
+    auth = Auth(store)
+    cluster = FakeCluster(api_resources=["pods", "deployments.apps"])
+    env = records.Environment(name="bare", context="bare")
+    store.put(env)
+    env = connect(store, env, cluster)
+    user = auth.create_user(
+        "inv", "a strong one", grants=[records.Grant(environment_id=env.id, role="operator")]
+    )
+    ctx = Context(environment=env, cluster=cluster, store=store, user=user, investigation_id="inv_t")
+    call, evidence = builtin_registry(extensions=False).execute(
+        "k8s.alert_rules", {"namespaces": ["shop"]}, ctx, auth
+    )
+    assert call.status == "completed", call.reason
+    assert evidence is not None and evidence.coverage == "cannot_answer"
+    assert "PrometheusRule CRD is not installed" in evidence.coverage_reason
+    _, perms = builtin_registry(extensions=False).execute("k8s.permissions", {}, ctx, auth)
+    assert perms is not None  # the absence is still evidence: checked, and not served here
+    assert {"list prometheusrules", "list servicemonitors"} <= set(perms.data["not_served"])
+    assert "not served: " in perms.summary and "list prometheusrules" not in perms.data["denied"]
+
+
+def test_alert_rules_run_with_prometheusrule_but_no_servicemonitor_crd(tmp_path: Path) -> None:
+    """D-022: a missing ServiceMonitor CRD alone no longer refuses the capability."""
+    store = Store(tmp_path / "k8sholmes.db")
+    auth = Auth(store)
+    rule = {
+        "kind": "PrometheusRule",
+        "metadata": {"name": "web", "namespace": "shop"},
+        "spec": {"groups": [{"name": "g", "rules": [{"alert": "WebDown", "expr": 'up{job="web"} == 0'}]}]},
+    }
+    cluster = FakeCluster(
+        [rule], api_resources=["pods", "deployments.apps", "prometheusrules.monitoring.coreos.com"]
+    )
+    env = records.Environment(name="rules", context="rules")
+    store.put(env)
+    env = connect(store, env, cluster)
+    assert env.permissions["list prometheusrules"] is True
+    assert "list servicemonitors" not in env.permissions
+    user = auth.create_user(
+        "inv", "a strong one", grants=[records.Grant(environment_id=env.id, role="operator")]
+    )
+    ctx = Context(environment=env, cluster=cluster, store=store, user=user, investigation_id="inv_t")
+    call, evidence = builtin_registry(extensions=False).execute(
+        "k8s.alert_rules", {"namespaces": ["shop"]}, ctx, auth
+    )
+    assert call.status == "completed", call.reason
+    assert evidence is not None and evidence.coverage == "observed"
+    assert [r["alert"] for r in evidence.data["rules"]] == ["WebDown"]
+
+
 def test_permissions_top_knowledge_and_recall(world) -> None:
     perms = run(world, "k8s.permissions")
     assert perms.data["permissions"]["list pods"] is True

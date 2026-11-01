@@ -1,3 +1,5 @@
+import pytest
+
 from k8sholmes.evidence import REDACTED, Result, cap, evidence_from_result, redact, redact_text
 from k8sholmes.records import Call
 
@@ -17,6 +19,28 @@ def test_secret_refs_keep_their_names() -> None:
     cleaned, n = redact(data)
     assert cleaned == data
     assert n == 0
+
+
+@pytest.mark.parametrize(
+    ("key", "redacted"),
+    [
+        ("password", True),
+        ("clientSecret", True),
+        ("apiKey", True),
+        ("access-key", True),
+        ("private_key", True),
+        ("refreshToken", True),
+        ("secretName", False),
+        ("tokenPath", False),
+        ("passwordFile", False),
+        ("key", False),
+        ("auth", False),
+    ],
+)
+def test_object_keys_are_redacted_as_privacy_md_says(key: str, redacted: bool) -> None:
+    cleaned, n = redact({key: "s3cr3t-value"})
+    assert (cleaned[key] == REDACTED) is redacted
+    assert n == int(redacted)
 
 
 def test_tokens_in_text_are_redacted() -> None:

@@ -14,6 +14,8 @@ from k8sholmes.models import OpenAICompatible, price_of, run_capability_tests, u
 from tests.helpers import closed_port
 
 SEEN: list[dict[str, Any]] = []
+THINKING_TOKENS = 300  # what the fake reasoning model spends before its answer
+ANSWER_ROOM = THINKING_TOKENS + 64  # thinking plus room for the answer itself
 MODE = {"value": "ok"}
 
 
@@ -42,18 +44,40 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer sk-test-key":
             self._send(401, b'{"error": "unauthorized"}')
             return
-        if MODE["value"] == "overloaded":
-            self._send(503, b'{"error": "overloaded"}')
+        if self._failure(body):
             return
-        if MODE["value"] == "bad":
-            self._send(400, b'{"error": "bad request"}')
+        if MODE["value"] == "thinking" and body.get("max_tokens", 0) < ANSWER_ROOM:
+            self._ran_out_thinking(body)
             return
-        if MODE["value"] == "garbage":
-            self._send(200, b"<html>not json</html>")
-            return
+        self._answer(body)
+
+    def _failure(self, body: dict[str, Any]) -> bool:
+        """The failure modes: an error answered, so nothing else is sent."""
+        failures = {
+            "overloaded": (503, b'{"error": "overloaded"}'),
+            "bad": (400, b'{"error": "bad request"}'),
+            "garbage": (200, b"<html>not json</html>"),
+        }
+        if MODE["value"] in failures:
+            self._send(*failures[MODE["value"]])
+            return True
         if body.get("response_format") and MODE["value"] == "no_structured":
             self._send(400, b'{"error": "response_format is not supported"}')
+            return True
+        return False
+
+    def _ran_out_thinking(self, body: dict[str, Any]) -> None:
+        """A reasoning model whose budget runs out while it thinks: no content, finish_reason length."""
+        usage = {"prompt_tokens": 10, "completion_tokens": body["max_tokens"]}
+        if body.get("stream"):
+            chunk = json.dumps({"choices": [], "usage": usage})
+            self._send(200, f"data: {chunk}\n\ndata: [DONE]\n\n".encode(), "text/event-stream")
             return
+        message = {"role": "assistant", "content": "", "reasoning": "Okay, the user wants..."}
+        response = {"choices": [{"message": message, "finish_reason": "length"}], "usage": usage}
+        self._send(200, json.dumps(response).encode())
+
+    def _answer(self, body: dict[str, Any]) -> None:
         if body.get("stream"):
             chunks = [
                 {"choices": [{"delta": {"content": "one "}, "finish_reason": None}]},
@@ -229,6 +253,25 @@ def test_capability_tests_pass_on_a_good_endpoint_and_fail_honestly(endpoint: re
         usable_for_investigations(endpoint)
     assert price_of(endpoint, 1_000_000, 500_000) == 2.0
     assert price_of(endpoint.model_copy(update={"price": None}), 1, 1) is None
+
+
+def test_capability_tests_leave_a_reasoning_model_room_to_think(endpoint: records.ModelEndpoint) -> None:
+    """Reasoning models (qwen3, deepseek-r1, gpt-oss) think before they answer; a budget of a few tokens
+    gives an empty reply and a false `failed` (found with qwen3:8b on Ollama)."""
+    MODE["value"] = "thinking"
+    results = run_capability_tests(OpenAICompatible(endpoint, "sk-test-key"))
+    budgets = [r["body"]["max_tokens"] for r in SEEN if r.get("body")]
+    # authentication, model, tool calling, streaming, structured, limits (connectivity lists the models)
+    assert budgets == [5, 1024, 1024, 1024, 1024, 16]
+    assert {k: v.status for k, v in results.items()} == {
+        "connectivity": "passed",
+        "authentication": "passed",
+        "model": "passed",
+        "tool_calling": "passed",
+        "streaming": "passed",
+        "structured": "passed",
+        "limits": "passed",
+    }
 
 
 def test_a_non_json_body_is_a_typed_permanent_failure(endpoint: records.ModelEndpoint) -> None:
