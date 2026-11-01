@@ -1,0 +1,14 @@
+{
+  "title": "framing",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question", "namespaces", "resources", "period_hours", "hypotheses", "intended_capabilities"],
+  "properties": {
+    "question": {"type": "string", "description": "The question restated precisely, in one sentence."},
+    "namespaces": {"type": "array", "items": {"type": "string"}, "description": "Namespaces in scope; empty for every namespace the permissions allow."},
+    "resources": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": {"kind": {"type": "string"}, "namespace": {"type": ["string", "null"]}, "name": {"type": "string"}}}, "description": "Specific resources the question names."},
+    "period_hours": {"type": "number", "description": "How far back the investigation looks, in hours; 24 when the question does not say."},
+    "hypotheses": {"type": "array", "items": {"type": "string"}, "description": "Initial explanations to test, each one sentence."},
+    "intended_capabilities": {"type": "array", "items": {"type": "string"}, "description": "Capability ids you intend to use first."}
+  }
+}
