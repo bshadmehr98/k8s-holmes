@@ -397,6 +397,29 @@ class Engine:
         self._emit("concluded", {"investigation_id": inv.id, "status": status})
         return inv
 
+    def conclude_only(
+        self, inv: Investigation, model: Model, user: User
+    ) -> tuple[findings_mod.Validated, Reply]:
+        """The concluding phase alone, on the investigation's stored evidence, storing no findings (§13.4).
+
+        A fixed-evidence model comparison calls this once per endpoint; the model call is recorded with
+        the phase `comparison`, so usage is counted and the investigation's own thread stays untouched.
+        """
+        environment = self.store.get(Environment, inv.environment_id)
+        self.auth.require(user, environment.id, "investigator")
+        evidence = {e.id: e for e in self.store.find(Evidence, {"investigation_id": inv.id})}
+        knowledge_ids = set(inv.knowledge_in_scope) | set(inv.exceptions_in_scope)
+        available, unavailable = self._capabilities(environment, user)
+        messages = [
+            *thread.messages_for(self.store, inv, environment, available, unavailable),
+            {"role": "user", "content": thread.CONCLUDE_INSTRUCTION},
+        ]
+        reply, _ = self._call_model(inv, model, "comparison", messages, schema=thread.CONCLUSION_SCHEMA)
+        validated = findings_mod.validate_conclusion(
+            thread.json_object(reply.content), evidence, knowledge_ids
+        )
+        return validated, reply
+
     # capabilities and the model
 
     def _capabilities(

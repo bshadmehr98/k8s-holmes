@@ -257,7 +257,16 @@ def set_state(store: Store, finding: Finding, state: FindingState, *, author: st
         update={"state": state, "updated_at": now(), "revisions": [*finding.revisions, revision]}
     )
     store.put(updated)
+    if state != "open":
+        pin_evidence(store, updated)
     return updated
+
+
+def pin_evidence(store: Store, finding: Finding) -> None:
+    """A reviewed finding's evidence outlives the retention policy (design §7.1, §16.3)."""
+    for ev in store.get_many(Evidence, [*finding.evidence_for, *finding.evidence_against]):
+        if ev.retention != "pinned":
+            store.put(ev.model_copy(update={"retention": "pinned"}))
 
 
 def revise(store: Store, finding: Finding, *, author: str, change: str, **updates: Any) -> Finding:

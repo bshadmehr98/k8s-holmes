@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -74,6 +74,9 @@ class Capability:
     run: Callable[[BaseModel, Context], Result]
     origin: str = "built-in"  # or "entry point <name>", "command <file>"
     coverage: tuple[str, ...] = ("observed",)  # the statements it can make, for the catalog page
+    retention: Literal["investigation", "short"] = (
+        "investigation"  # how long its evidence lives (§7.1, §16.3)
+    )
 
     def schema(self) -> dict[str, Any]:
         """The JSON schema the model sees as the tool's parameters."""
@@ -290,4 +293,5 @@ class Registry:
             systems=list(cap.systems),
             max_bytes=settings.max_log_bytes,
         )
+        evidence = evidence.model_copy(update={"retention": cap.retention})
         return made.model_copy(update={"evidence_id": evidence.id}), evidence

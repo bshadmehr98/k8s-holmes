@@ -32,6 +32,7 @@ class Runner:
         self._running: dict[str, threading.Thread] = {}
         self._keys: dict[str, str] = {}
         self._subscribers: dict[str, list[queue.Queue[Event]]] = {}
+        self.on_finished: Callable[[Investigation], None] | None = None  # after a run ends, in its thread
 
     # events
 
@@ -97,7 +98,9 @@ class Runner:
 
             def work() -> None:
                 try:
-                    target()
+                    finished = target()
+                    if self.on_finished is not None:
+                        self.on_finished(finished)
                 except Exception as exc:
                     log.exception("investigation %s failed in the background", investigation_id)
                     self._leave_failed(investigation_id, f"{type(exc).__name__}: {exc}")

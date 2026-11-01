@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
+from k8sholmes import saved as saved_mod
 from k8sholmes.api import Api, Request, Response
 from k8sholmes.app import App
 from k8sholmes.errors import InvalidInput
-from k8sholmes.records import Investigation
+from k8sholmes.records import Environment, Investigation, SavedInvestigation, User, now
 from k8sholmes.runner import Runner
 
 log = logging.getLogger("k8sholmes")
@@ -160,20 +161,58 @@ class K8sHolmesServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], app: App) -> None:
+    def __init__(self, address: tuple[str, int], app: App, *, scheduler_interval_s: float = 60.0) -> None:
         super().__init__(address, Handler)
         self.app = app
         self.runner = Runner(app.engine)
+        self.runner.on_finished = self._after_run
         self.api = Api(app, self.runner)
+        self.scheduler = saved_mod.Scheduler(
+            app.store, run_saved=self._run_saved, auth=app.auth, interval_s=scheduler_interval_s
+        )
+        self.scheduler.start()
 
     @property
     def url(self) -> str:
         host, port = self.server_address[0], self.server_port
         return f"http://{host}:{port}/"
 
+    def server_close(self) -> None:
+        self.scheduler.stop()
+        super().server_close()
+
+    def _run_saved(self, saved: SavedInvestigation) -> None:
+        """A scheduled run acts as the person who saved the investigation (design §12)."""
+        user = self.app.store.get(User, saved.created_by)
+        env = self.app.store.get(Environment, saved.environment_id)
+        inv = saved_mod.start_run(self.app.store, self.app.engine.start, saved, env, user)
+        self.runner.run(inv.id, user)
+
+    def _after_run(self, inv: Investigation) -> None:
+        """After a saved investigation's run: the comparison by code, its report, the notification (§12)."""
+        if not inv.saved_id or inv.status not in ("completed", "partial"):
+            return
+        saved = self.app.store.get(SavedInvestigation, inv.saved_id)
+        comparison = saved_mod.compare_runs(self.app.store, saved, inv.id)
+        report = saved_mod.comparison_report(self.app.store, saved, comparison, by="scheduler")
+        self.runner.publish(
+            "comparison", {"investigation_id": inv.id, "summary": comparison.summary, "report_id": report.id}
+        )
+        if saved_mod.notify(saved, comparison, f"{self.url}#/reports/{report.id}"):
+            self.app.store.put(
+                saved.model_copy(
+                    update={"notification": saved.notification.model_copy(update={"last_sent_at": now()})}
+                )
+            )
+
 
 def make_server(
-    app: App, *, host: str = "127.0.0.1", port: int = 8800, allow_remote: bool = False
+    app: App,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8800,
+    allow_remote: bool = False,
+    scheduler_interval_s: float = 60.0,
 ) -> K8sHolmesServer:
     """A server bound to the loopback interface unless `allow_remote` (design §15.5, guarantee 21).
 
@@ -186,7 +225,7 @@ def make_server(
     for inv in app.engine.mark_interrupted():
         log.warning("investigation %s was running when the server stopped; it is marked interrupted", inv.id)
     try:
-        return K8sHolmesServer((host, port), app)
+        return K8sHolmesServer((host, port), app, scheduler_interval_s=scheduler_interval_s)
     except OSError as exc:
         raise InvalidInput(f"cannot listen on {host}:{port}: {exc}") from exc
 

@@ -3,6 +3,7 @@ before by finding key, a one-line result when nothing changed, notifications by 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ import threading
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from k8sholmes.errors import InvalidInput
 from k8sholmes.records import (
@@ -124,9 +125,18 @@ def compare_runs(store: Store, saved: SavedInvestigation, after_id: str) -> Comp
     )
 
 
+VOLATILE_KEYS = ("inventory_id", "period_start", "period_end", "taken_at")  # bookkeeping, not observation
+
+
 def _evidence_hash(store: Store, evidence_id: str) -> str:
+    """A digest of what was observed: the stored data without the keys that differ on every read."""
     found = store.get_many(Evidence, [evidence_id])
-    return found[0].sha256 if found else evidence_id
+    if not found:
+        return evidence_id
+    data = found[0].data
+    if isinstance(data, dict):
+        data = {k: v for k, v in cast(dict[str, Any], data).items() if k not in VOLATILE_KEYS}
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def comparison_report(store: Store, saved: SavedInvestigation, comparison: Comparison, *, by: str) -> Report:
@@ -263,6 +273,8 @@ class Scheduler:
                 and saved.schedule.next_run_at <= at
             )
             if due:
+                moved = saved.schedule.model_copy(update={"next_run_at": _next_run(saved, at)})
+                self.store.put(saved.model_copy(update={"schedule": moved}))  # a failing start never loops
                 try:
                     self.run_saved(saved)
                     started.append(saved.id)

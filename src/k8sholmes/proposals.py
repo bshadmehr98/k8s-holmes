@@ -37,7 +37,7 @@ Detector = Callable[[Any, set[str]], bool | None]
 
 
 def _oom(data: Any, names: set[str]) -> bool | None:
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or "pods" not in data:
         return None
     pods = cast(list[dict[str, Any]], cast(dict[str, Any], data).get("pods") or [])
     states = [
@@ -71,13 +71,13 @@ def _safeguard(field: str, below: int | None = None) -> Detector:
 
 
 def _no_backends(data: Any, names: set[str]) -> bool | None:
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or "matching_pods" not in data:
         return None
     return not cast(dict[str, Any], data).get("matching_pods")
 
 
 def _alert_missing(data: Any, names: set[str]) -> bool | None:
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or "workloads_without_alerts" not in data:
         return None
     without = {
         str(w).split("/")[-1]

@@ -48,7 +48,9 @@ def _referenced_investigations(store: Store, environment_id: str) -> set[str]:
 
 
 def _pinned_evidence(store: Store, environment_id: str) -> set[str]:
-    pinned: set[str] = set()
+    pinned = {
+        e.id for e in store.find(Evidence, {"environment_id": environment_id}) if e.retention == "pinned"
+    }
     for f in store.find(Finding, {"environment_id": environment_id}):
         if f.kind == "conclusion" or f.state != "open":
             pinned.update(f.evidence_for)
@@ -71,6 +73,7 @@ def purge(store: Store, auth: Auth, environment: Environment) -> dict[str, int]:
     with store.transaction():
         for ev in store.find(Evidence, {"environment_id": environment.id}):
             if ev.retention == "short" and ev.collected_at < cutoff_short and ev.id not in pinned:
+                # the flag and the references agree by construction; both are checked (§16.3)
                 store.delete(Evidence, ev.id)
                 removed["evidence"] += 1
         for inv in store.find(Investigation, {"environment_id": environment.id}):

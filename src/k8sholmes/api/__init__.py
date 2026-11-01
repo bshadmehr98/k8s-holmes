@@ -2,7 +2,8 @@
 
 Routes are plain functions registered with `@route` in the modules of this package, one per resource:
 `account`, `environments` (and capabilities), `investigations` (and evidence, findings), `knowledge`,
-`settings` (models, users, audit). This module holds the request and response shapes, the dispatch and the
+`reports` (and shares, the live summary, the model comparison), `proposals`, `saved`, `settings` (models,
+users, audit). This module holds the request and response shapes, the dispatch and the
 checks every route uses. Domain work goes to the engine, the registry, the knowledge and findings modules.
 """
 
@@ -171,14 +172,26 @@ class Api:
         return req.body
 
 
-from k8sholmes.api import account, environments, investigations, knowledge, settings  # noqa: E402
+from k8sholmes.api import (  # noqa: E402
+    account,
+    environments,
+    investigations,
+    knowledge,
+    proposals,
+    reports,
+    saved,
+    settings,
+)
 
 _ROUTE_MODULES = (
     account,
     environments,
     investigations,
     knowledge,
+    proposals,
+    reports,
+    saved,
     settings,
 )  # imported for their @route registrations
 
-__all__ = ["Api", "Request", "Response", "dump", "parse_when", "route"]
+__all__ = ["PUBLIC_ROUTES", "Api", "Request", "Response", "dump", "parse_when", "route"]
