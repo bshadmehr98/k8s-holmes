@@ -11,11 +11,13 @@ minutes and changes it safely. You have no context on purpose. Do not edit files
    limits table).
 2. Check the changed code against it:
    - an abstraction with one use that the design doesn't name as an extension point (the ports, the
-     check catalogue);
+     capability registry, the report table);
    - layers that only forward calls; base classes with one subclass; manager / handler / registry layers;
    - functions over about 40 lines or complexity 10, modules over about 300 lines, more than 6 parameters;
-   - a class hierarchy where a dict of functions or a `match` would do (checks are plain functions in a
-     table);
+   - a class hierarchy where a dict of functions or a `match` would do (capabilities are objects in one
+     registry; report kinds are functions in a table);
+   - a module that crosses the boundaries of `design/current.md` §3 (the page calling the store, the
+     engine importing the server);
    - a new core dependency, or an optional one without a reason in `design/decisions.md`;
    - vague names (`data`, `info`, `util`, `manager`), comments that say *what* instead of *why*;
    - dead code, unused parameters, commented-out code.

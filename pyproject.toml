@@ -1,13 +1,13 @@
 [project]
 name = "k8sholmes"
 dynamic = ["version"]
-description = "A detective for Kubernetes clusters: gathers evidence read-only, runs code checks for the known failure patterns, reasons over the evidence, and writes a case file with findings, a root cause and remedies it never runs."
+description = "A self-hosted platform for investigating Kubernetes environments: gated investigative capabilities, evidence with coverage, findings that cite it, organizational knowledge and accepted exceptions, reports computed from records, and your own OpenAI-compatible model."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Bahman Shadmehr", email = "info@bshadmehr.me" }]
-keywords = ["kubernetes", "troubleshooting", "diagnostics", "root-cause", "sre", "devops", "kubectl"]
+keywords = ["kubernetes", "investigation", "troubleshooting", "reliability", "sre", "devops", "kubectl", "llm", "tool-calling"]
 classifiers = [
     "Development Status :: 1 - Planning",
     "Intended Audience :: Developers",
@@ -22,7 +22,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "pydantic>=2.7",   # records: the case file and its parts (design §7)
+    "pydantic>=2.7",   # every record and every capability input (design §2, §5.1)
 ]
 
 [project.scripts]
@@ -73,7 +73,7 @@ max-complexity = 10
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108", "S603", "S607", "PT018", "E501", "PLC0415"]
 "examples/**" = ["S101", "S108", "PT018", "T201"]
-"src/k8sholmes/errors.py" = ["N818"]  # ClusterUnreachable, InvalidCase … are the public names
+"src/k8sholmes/errors.py" = ["N818"]  # ClusterUnreachable, PermissionRefused … are the public names
 
 [tool.pyright]
 include = ["src", "tests"]

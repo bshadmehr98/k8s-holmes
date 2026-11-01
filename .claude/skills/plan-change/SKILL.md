@@ -1,29 +1,32 @@
 ---
 name: plan-change
-description: Plan a design change as a change record in design/changes/ and get it approved before writing code. Use after start-task when a change touches the public API, CLI, guarantees, the case file format, the checks, the ports, what is read from the cluster, extras or dependencies.
+description: Plan a design change as a change record in design/changes/ and get it approved before writing code. Use after start-task when a change touches the public API, CLI, guarantees, capabilities, the engine, records or the schema, coverage rules, exception matching, roles, ports, extras or dependencies.
 ---
 
 # Plan a design change
 
-1. Read `design/current.md` (§1 goals and non-goals, the sections the change touches, §14 guarantees),
+1. Read `design/current.md` (§1 goals and non-goals, the sections the change touches, §18 guarantees),
    `design/decisions.md` and the related records in `design/changes/`.
 2. Next number: the highest `design/changes/NNNN-*.md` plus one.
 3. Write `design/changes/NNNN-<short-name>.md` in the format of the existing records (for example
    `design/changes/0001-initial-design.md`): Status `proposed`, Context, Problem, Options (at least two,
    one of them "leave it as it is"), Decision, Consequences, Migration and compatibility. Include:
-   - a sketch of the public API or CLI as a user would call it;
-   - the new or changed acceptance cases, numbered after the last one in `design/current.md` §14;
-   - the tests that will prove it (unit, e2e, a recorded cluster if the evidence gathering changes).
+   - a sketch of the public API, the CLI or the interface as a user would meet it;
+   - the new or changed acceptance cases, numbered after the last one in `design/current.md` §18;
+   - the tests that will prove it (unit, e2e on the demo recording, a real cluster if evidence gathering
+     changes).
 4. Answer each risk the change touches, in the record:
-   - **read-only**: nothing new writes to the cluster, and every `kubectl` verb used is in the allowed
-     list of `design/current.md` §4;
-   - **code decides first**: a new model call is justified, whole-case, and its reply is checked by code
-     (§6); never one call per pod or per resource;
-   - **evidence**: every finding still names the evidence it rests on, with its grade (§2, §5);
-   - **case file**: optional keys keep `format_version`; anything else needs `deprecate-and-migrate` (§7);
-   - **secrets**: Secret values, tokens and kubeconfig credentials never reach a case file, a report or a
-     model (§12);
-   - the core imports no extra; a new dependency is an optional extra with a reason in
+   - **the gate stays code** (§5.2): what may run is decided from the user's role and the environment's
+     settings, never from the model or from text in a result; a new capability states its class, systems,
+     permissions and coverage;
+   - **coverage** (§7): a new capability or question shape says which statements it can make, and the
+     engine's validation (§6.3) still refuses conclusions the coverage does not support;
+   - **records** (§2, §16): new optional columns or JSON keys keep the schema version; anything else is a
+     migration with `deprecate-and-migrate`; ids and condition codes never change meaning;
+   - **exceptions and knowledge** (§9): matching stays exact; knowledge is never evidence;
+   - **secrets and access** (§14): nothing new reaches a model message, a report, an export or a log that
+     the redactor has not seen; every new API route checks the session, the role and the environment;
+   - **the core imports no extra**; a new dependency is an optional extra with a reason in
      `design/decisions.md`;
    - is there a smaller option that meets the need? (CONTRIBUTING.md, "Keep it simple")
 5. Commit: `docs(design): propose NNNN <short name>`.

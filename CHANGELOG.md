@@ -8,7 +8,8 @@ design changed is in [`design/changes/`](design/changes/).
 
 ### Added
 
-- The repository: the design folder with the proposed first design
-  ([0001](design/changes/0001-initial-design.md)), the contributor rules, the Claude Code workflow (skills,
-  hooks, reviewer agents), the GitHub workflows, `scripts/check.sh`, and the package skeleton with its
-  typed errors. Nothing of the design is implemented yet.
+- The design of K8sHolmes, an infrastructure investigation platform, accepted from the owner's brief
+  ([0001](design/changes/0001-initial-design.md)); the repository in the shape of the owner's other
+  projects: the contributor rules, the Claude Code workflow (skills, hooks, reviewer agents), the GitHub
+  workflows, `scripts/check.sh`, and the package skeleton with its typed errors. Nothing of the design is
+  implemented yet.

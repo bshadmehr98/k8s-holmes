@@ -24,26 +24,23 @@ Carried into the design:
 
 - The **name** clashes. "K8sHolmes" and "HolmesGPT" will be confused, and HolmesGPT is a CNCF project.
   This is the first open question for the owner ([decisions.md](../decisions.md) D-001).
-- k8sgpt's analyzers are the same idea as the check catalogue of design §5. k8sgpt is written in Go and
-  its explanations are per finding; the design differs in **keeping the evidence as a case file**, in
-  **grading** each finding by its evidence, and in **one whole-case reasoning call checked by code**
-  instead of a per-finding explanation (`inferred`: that these differences matter to users is not
-  tested).
-- HolmesGPT is agentic: the model decides what to fetch. The design takes the opposite stance (code
-  gathers, the model reasons once over what was gathered), because it is cheaper, auditable and
-  deterministic in everything but the one call (`inferred`).
+- k8sgpt's analyzers resemble the built-in capabilities of design §5, but a fixed analyzer per question is
+  what the brief rules out; the design's engine chooses capabilities per question and keeps evidence with
+  coverage, knowledge, exceptions and verification as records (`inferred`: that these differences matter
+  to users is not tested).
+- HolmesGPT is agentic too. The design differs in the code gate on every call, the coverage rules, the
+  organizational knowledge and exceptions, and reports computed from records (`inferred`).
 
 ## 2. What was not researched
 
-- Whether the owner means a Kubernetes troubleshooting tool at all: the product was inferred from the
-  name. The owner's request named only the repository layout and process.
-- The failure patterns that matter most in practice, and their frequency. The check catalogue in design
-  §5 is a first list from common experience; it should be validated against real incidents (a study in
-  the owner's research repository, if the owner wants one).
-- Which model does the reasoning well on redacted cluster evidence, at what cost, and how often it
-  invents evidence. The design's "every reference must point at real evidence" rule makes this
-  measurable.
-- Whether users want a dashboard, a CLI or an IDE or chat integration first.
+- The owner's brief ([0001-owner-brief.md](0001-owner-brief.md)) arrived later the same day and settled
+  what the product is; this note predates it.
+- The conditions that matter most in practice, and their frequency. The built-in capabilities and
+  condition codes of design §5 and §8 are a first list from common experience; they should be validated
+  against real incidents.
+- Which model investigates well with tools over redacted cluster evidence, at what cost, and how often it
+  cites evidence that does not exist. The design's validation (§6.3) and model comparison (§13.4) make
+  this measurable.
 
 ## 3. The machine this started on
 

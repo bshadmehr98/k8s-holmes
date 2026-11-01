@@ -1,36 +1,54 @@
-# k8sholmes
+# K8sHolmes
 
-A detective for Kubernetes clusters. Point it at a pod that keeps restarting, a deployment that will not
-roll out or a service nobody can reach; it gathers the evidence read-only, runs the known failure patterns
-against it, reasons over what it found, and writes a case file: what is wrong, why, the evidence for each
-claim, and the exact commands that would fix it. It never runs them.
+A self-hosted platform for investigating Kubernetes environments. Ask a question in plain words. K8sHolmes
+frames it, finds out what it may read, chooses from a catalog of investigative capabilities, gathers
+evidence, tests explanations, and answers with findings that cite their evidence, say what they could not
+know, and respect what your team has already decided is intentional. Reports are computed from the
+records. You bring the model; code does the deciding.
 
-**Status: proposed, nothing built.** The first design is written and waits for the owner:
-[design/changes/0001-initial-design.md](design/changes/0001-initial-design.md). Start with
-[design/README.md](design/README.md) for why, and [design/current.md](design/current.md) for how.
+**Status: the design is accepted and being built; nothing works yet.** The design is in
+[design/current.md](design/current.md) (§19 says what is implemented); why it looks like this is in
+[design/README.md](design/README.md) and the owner's brief,
+[design/history/0001-owner-brief.md](design/history/0001-owner-brief.md).
 
-## What it will do
+## What it does
 
-- **Gather evidence like an engineer would**, in seconds and read-only: the pod, its events, its logs, its
-  owner chain, the node, the volumes, the config it references; a service's endpoints and the pods its
-  selector really matches.
-- **Run the known failure patterns as code**: OOMKilled, image not found or unauthorized, Pending for
-  resources, affinity or taints, a probe on the wrong port, a missing ConfigMap key, a Service whose
-  selector matches nothing, a PVC without a provisioner, a stuck rollout, a node under pressure, and more.
-  Deterministic, offline, with stable ids.
-- **Ask a model once**, over the whole redacted case, to connect the findings into a root cause; check
-  its answer against the evidence; keep exactly what it was sent.
-- **Write a case file** you can open a week later without the cluster: evidence as returned with hashes,
-  findings with their grade, the report, the remedies with their risk.
-- **Never change anything.** One adapter, a short list of verbs, Secrets never read, no "apply" anywhere.
+- **Investigates any question**, not a fixed list: which services look unused, which alerts are missing,
+  what we overlook, what broke without an alert, whether the environment is isolated, the likely path of a
+  failure, what changed before a problem, what a failure would affect, whether the last change helped.
+- **Runs tools under a code gate.** A catalog of capabilities with clear purposes, validated inputs,
+  permissions, classes (inspect, probe, change) and coverage; browse, scope, test and audit them; add your
+  own through a documented extension mechanism. What may run is never decided by the model.
+- **Keeps evidence with coverage.** Everything read is recorded with its source, query, time and hash, and
+  says whether it observed something, observed its absence, had no data, or cannot answer. "Unused",
+  "isolated" and "traced" are never claimed without the source that could know.
+- **Separates observation, hypothesis and reviewed conclusion**, cites evidence for and against, states
+  uncertainty and missing information, and never prints invented confidence numbers.
+- **Remembers your decisions.** Accept a finding as intentional with its exact scope, explanation,
+  approver, review date and reconsideration triggers; later investigations apply it precisely and never
+  to anything else. Keep scoped knowledge (ownership, criticality, maintenance windows, constraints) and
+  see where it influenced a conclusion.
+- **Reports from records**: live summaries, final reports, incident reviews, reliability and monitoring
+  reviews, comparisons between runs; every number computed; shareable, permission-controlled; Markdown and
+  JSON downloads.
+- **Follows through**: findings move from open to acknowledged, accepted risk, fixed and verified;
+  proposals state their intended effect and verification; a verification reruns the checks and compares
+  before and after.
+- **Recurs quietly**: save a question with its scope and schedule; later runs report what changed, not
+  what stayed the same.
+- **Your model, visibly**: any OpenAI-compatible endpoint, tested for connectivity, tool calling,
+  streaming and structured replies, with limits, budgets and usage shown, and no silent switching.
+- **A calm interface**: graphite surfaces, ivory text, copper for actions, a geometric H mark; the
+  question first, the answer next, everything else behind tabs and inspectors.
 
 ## Install and run
 
-Not yet. When the design is accepted and built:
+Not yet. When milestone 2 lands:
 
 ```text
 uv tool install k8sholmes
-k8sholmes investigate pod/web-7d9f -n shop
+k8sholmes demo              # a recorded environment and a scripted model, no cluster needed
+k8sholmes setup && k8sholmes serve
 ```
 
 ## How this is being built
