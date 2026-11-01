@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from k8sholmes.cli import main, report_text
+from k8sholmes.cli import main
 from k8sholmes.records import Evidence
+from k8sholmes.reports import report_text
 from k8sholmes.testing import ScriptedModel
 from k8sholmes.testing.demo import PLANTED_BEARER, PLANTED_TOKEN
 from k8sholmes.testing.model import calls, structured, text

@@ -9,10 +9,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from k8sholmes import __version__
+from k8sholmes import __version__, server
+from k8sholmes.api import Api
 from k8sholmes.app import App, default_home
 from k8sholmes.errors import K8sHolmesError
-from k8sholmes.records import Call, Environment, Evidence, Finding, Investigation, Scope, Step, User
+from k8sholmes.records import Environment, Evidence, Investigation, Scope, User
+from k8sholmes.reports import investigation_json, report_text
+from k8sholmes.runner import Runner
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -52,6 +55,15 @@ def _parser() -> argparse.ArgumentParser:
     demo.add_argument(
         "--question", default=None, help="run one investigation right away and print its report"
     )
+
+    serve = sub.add_parser("serve", help="the web interface")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8800)
+    serve.add_argument(
+        "--allow-remote", action="store_true", help="bind a non-loopback host (put TLS in front)"
+    )
+
+    sub.add_parser("setup", help="print the one-time link that creates the first administrator")
 
     export = sub.add_parser("export", help="write an investigation's report, JSON and evidence to a folder")
     export.add_argument("investigation_id")
@@ -141,7 +153,7 @@ def _investigate(app: App, args: argparse.Namespace) -> int:
         app.engine.on_event = _print_event
     inv = app.engine.run(inv.id, user)
     if args.json:
-        print(json.dumps(_investigation_json(app, inv), indent=1, default=str))
+        print(json.dumps(investigation_json(app, inv), indent=1, default=str))
     else:
         print()
         print(report_text(app, inv))
@@ -159,61 +171,6 @@ def _print_event(kind: str, payload: dict[str, Any]) -> None:
             + (f" ({call['reason'][:80]})" if call["reason"] else ""),
             file=sys.stderr,
         )
-
-
-def _investigation_json(app: App, inv: Investigation) -> dict[str, Any]:
-    return {
-        "investigation": inv.model_dump(mode="json"),
-        "findings": [
-            f.model_dump(mode="json") for f in app.store.find(Finding, {"investigation_id": inv.id})
-        ],
-        "steps": [
-            s.model_dump(mode="json")
-            for s in app.store.find(Step, {"investigation_id": inv.id}, order_by="seq")
-        ],
-        "calls": [c.model_dump(mode="json") for c in app.store.find(Call, {"investigation_id": inv.id})],
-        "evidence": [
-            e.model_dump(mode="json") for e in app.store.find(Evidence, {"investigation_id": inv.id})
-        ],
-    }
-
-
-def report_text(app: App, inv: Investigation) -> str:
-    """The investigation as plain text (the Markdown report of design §10 arrives with milestone 3)."""
-    findings = app.store.find(Finding, {"investigation_id": inv.id})
-    evidence = {e.id: e for e in app.store.find(Evidence, {"investigation_id": inv.id})}
-    lines = [
-        f"# {inv.question}",
-        "",
-        f"Status: {inv.status}. Model: {inv.model_name or '-'}. Steps: {inv.current_step}. "
-        f"Evidence: {len(evidence)}.",
-        "",
-    ]
-    if inv.answer:
-        lines += ["## Answer", "", inv.answer, ""]
-    if findings:
-        lines += ["## Findings", ""]
-        for f in sorted(findings, key=lambda f: (f.state != "open", f.kind, f.title)):
-            state = f" [{f.state}" + (f", exception {f.exception_id}" if f.exception_id else "") + "]"
-            lines.append(f"- **{f.title}** ({f.kind}, {f.condition}){state}")
-            lines.append(f"  {f.explanation}")
-            cited = ", ".join(
-                f"{e} ({evidence[e].source}, {evidence[e].coverage})" if e in evidence else e
-                for e in f.evidence_for
-            )
-            lines.append(f"  Evidence: {cited}")
-            if f.uncertainty:
-                lines.append(f"  Uncertainty: {f.uncertainty}")
-            if f.exception_note:
-                lines.append(f"  Note: {f.exception_note}")
-            if f.knowledge_used:
-                lines.append(f"  Influenced by knowledge: {', '.join(f.knowledge_used)}")
-            for step in f.next_steps:
-                lines.append(f"  Next: {step}")
-        lines.append("")
-    if inv.limitations:
-        lines += ["## Limitations", "", *[f"- {lim}" for lim in inv.limitations], ""]
-    return "\n".join(lines)
 
 
 def _demo(app: App, args: argparse.Namespace) -> int:
@@ -237,7 +194,7 @@ def _export(app: App, args: argparse.Namespace) -> int:
     out: Path = args.out
     (out / "evidence").mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(report_text(app, inv))
-    payload = {"format_version": "1", **_investigation_json(app, inv)}
+    payload = {"format_version": "1", **investigation_json(app, inv)}
     (out / "report.json").write_text(json.dumps(payload, indent=1, default=str))
     for ev in app.store.find(Evidence, {"investigation_id": inv.id}):
         (out / "evidence" / f"{ev.id}.json").write_text(
@@ -247,12 +204,31 @@ def _export(app: App, args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve(app: App, args: argparse.Namespace) -> int:
+    server.serve(app, host=args.host, port=args.port, allow_remote=args.allow_remote)
+    return 0
+
+
+def _setup(app: App, args: argparse.Namespace) -> int:
+    if not app.auth.needs_setup():
+        print("this K8sHolmes is set up already; an administrator adds users in Settings", file=sys.stderr)
+        return 1
+    api = Api(app, Runner(app.engine))
+    print(f"start the server, then open http://127.0.0.1:8800/#/?token={api.setup_token}")
+    print(
+        f"(the token is also in {app.home / 'setup-token'}; the server prints this link on its first start)"
+    )
+    return 0
+
+
 COMMANDS = {
     "demo": _demo,
     "environments": _environments,
     "capabilities": _capabilities,
     "investigate": _investigate,
     "export": _export,
+    "serve": _serve,
+    "setup": _setup,
 }
 
 

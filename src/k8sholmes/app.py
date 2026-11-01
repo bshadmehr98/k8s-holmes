@@ -66,6 +66,12 @@ class App:
             return RecordedCluster(environment.recording)
         return Kubectl(environment.context, kubeconfig=environment.kubeconfig)
 
+    def check_model(self, endpoint_id: str | None) -> None:
+        """Raise before an investigation starts if its endpoint is missing or untested (design §13.2)."""
+        self.model_for(
+            Investigation(environment_id="", question="check", created_by="", model_endpoint_id=endpoint_id)
+        )
+
     def model_for(self, investigation: Investigation) -> Model:
         endpoint_id = investigation.model_endpoint_id
         if endpoint_id == DEMO_ENDPOINT_ID:

@@ -82,6 +82,6 @@ def test_knowledge_influence_is_shown_and_never_cited_as_evidence(demo: Demo) ->
     assert findings
     assert all(note.id in f.knowledge_used for f in findings)
     assert all(note.id not in f.evidence_for for f in findings)
-    from k8sholmes.cli import report_text
+    from k8sholmes.reports import report_text
 
     assert "Influenced by knowledge" in report_text(demo.app, inv)
