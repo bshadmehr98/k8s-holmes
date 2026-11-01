@@ -1,0 +1,99 @@
+[project]
+name = "k8sholmes"
+dynamic = ["version"]
+description = "A detective for Kubernetes clusters: gathers evidence read-only, runs code checks for the known failure patterns, reasons over the evidence, and writes a case file with findings, a root cause and remedies it never runs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Bahman Shadmehr", email = "info@bshadmehr.me" }]
+keywords = ["kubernetes", "troubleshooting", "diagnostics", "root-cause", "sre", "devops", "kubectl"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.7",   # records: the case file and its parts (design §7)
+]
+
+[project.scripts]
+k8sholmes = "k8sholmes.cli:main"
+
+[dependency-groups]
+# Development tools (PEP 735): installed by `uv sync`, never published as an extra.
+dev = [
+    "pytest>=8", "pytest-cov>=5", "pytest-timeout>=2.3", "hypothesis>=6.100",
+    "ruff>=0.6", "pyright>=1.1.380",
+]
+
+[project.urls]
+Homepage = "https://github.com/bshadmehr98/k8sholmes"
+Repository = "https://github.com/bshadmehr98/k8sholmes"
+Issues = "https://github.com/bshadmehr98/k8sholmes/issues"
+Changelog = "https://github.com/bshadmehr98/k8sholmes/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/k8sholmes/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/k8sholmes"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/", "tests/", "docs/", "examples/", "design/", "README.md", "CONTRIBUTING.md", "AGENTS.md",
+    "LICENSE", "CHANGELOG.md", "pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["design"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "N", "S", "C4", "DTZ", "PL", "C90"]
+ignore = ["PLR0913", "PLR0917", "PLR2004"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108", "S603", "S607", "PT018", "E501", "PLC0415"]
+"examples/**" = ["S101", "S108", "PT018", "T201"]
+"src/k8sholmes/errors.py" = ["N818"]  # ClusterUnreachable, InvalidCase … are the public names
+
+[tool.pyright]
+include = ["src", "tests"]
+strict = ["src"]
+pythonVersion = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not cluster and not hosted'"
+timeout = 120
+markers = [
+    "e2e: acceptance-case tests (run by default)",
+    "cluster: tests against a real local cluster (kind or minikube); run by hand, see CONTRIBUTING.md",
+    "hosted: a real model call; needs an API key in the environment; run by hand",
+    "slow: slower than 5 s",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/k8sholmes"]
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload", "\\.\\.\\."]

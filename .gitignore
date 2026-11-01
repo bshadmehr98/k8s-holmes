@@ -1,0 +1,44 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python caches and build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.kubeconfig
+kubeconfig*
+
+# Case files and other output made while developing
+cases/
+out/
+*.log
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Claude Code: machine-specific settings
+.claude/settings.local.json
+.claude/worktrees/
