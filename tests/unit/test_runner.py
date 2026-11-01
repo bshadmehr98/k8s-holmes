@@ -7,20 +7,20 @@ from pathlib import Path
 
 from k8sholmes.app import App
 from k8sholmes.records import Investigation
-from k8sholmes.runner import EventBus, Runner
+from k8sholmes.runner import Runner
 
 
-def test_bus_delivers_to_subscribers_of_the_investigation_only() -> None:
-    bus = EventBus()
-    a = bus.subscribe("inv_a")
-    b = bus.subscribe("inv_b")
-    bus.publish("step", {"investigation_id": "inv_a", "n": 1})
-    bus.publish("step", {"investigation_id": "inv_c", "n": 2})
+def test_events_reach_subscribers_of_the_investigation_only(tmp_path: Path) -> None:
+    runner = Runner(App.open(tmp_path / "home", extensions=False).engine)
+    a = runner.subscribe("inv_a")
+    b = runner.subscribe("inv_b")
+    runner.publish("step", {"investigation_id": "inv_a", "n": 1})
+    runner.publish("step", {"investigation_id": "inv_c", "n": 2})
     assert a.get_nowait() == ("step", {"investigation_id": "inv_a", "n": 1})
     assert b.empty()
-    bus.unsubscribe("inv_a", a)
-    bus.unsubscribe("inv_a", a)  # twice is fine
-    bus.publish("step", {"investigation_id": "inv_a", "n": 3})
+    runner.unsubscribe("inv_a", a)
+    runner.unsubscribe("inv_a", a)  # twice is fine
+    runner.publish("step", {"investigation_id": "inv_a", "n": 3})
     assert a.empty()
 
 
@@ -29,7 +29,7 @@ def test_runner_runs_once_per_investigation_and_follows_up_in_the_background(tmp
     env, user = app.setup_demo()
     runner = Runner(app.engine)
     inv = app.engine.start(environment=env, question="Why is api restarting?", user=user)
-    q = runner.bus.subscribe(inv.id)
+    q = runner.subscribe(inv.id)
     runner.run(inv.id, user, key="k")
     runner.run(inv.id, user, key="k")  # a second start while running is ignored
     assert runner.by_key("k") == inv.id and runner.by_key("other") is None

@@ -106,8 +106,9 @@ src/k8sholmes/
   saved.py              saved investigations, schedules, run comparison, notifications (§12)
   models.py             the Model port, the OpenAI-compatible client, capability tests, usage, the secrets file (§13)
   app.py                the composition root: the home folder, the store, auth, the registry, the engine, the demo
-  server.py  api.py     the web server (standard library), the JSON API and server-sent events (§15)
-  runner.py             investigations in background threads, the event bus the stream reads, idempotency keys
+  server.py             the web server (standard library), the static page and the event stream (§15)
+  api/                  the JSON API, one module per resource; every route checks session, role and environment (§14.1)
+  runner.py             investigations in background threads, their events for the stream, idempotency keys
   page/                 the interface: static HTML, CSS tokens, JavaScript modules, no build step (§15)
   cli.py                the command line (§15.5)
   testing/              FakeCluster, RecordedCluster, ScriptedModel, DemoModel, the demo cluster, contract checkers

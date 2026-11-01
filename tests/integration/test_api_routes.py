@@ -9,7 +9,7 @@ from typing import Any
 from k8sholmes.app import App
 from k8sholmes.records import AuditEntry, Finding, Investigation
 from k8sholmes.server import serve_in_thread
-from tests.integration.test_server import Client
+from tests.helpers import Client
 
 
 def raw_post(base: str, body: bytes) -> tuple[int, bytes]:
@@ -261,7 +261,7 @@ def test_investigation_control_routes_and_request_parsing(tmp_path: Path) -> Non
             assert response.status == 200 and response.read() == b""
         status, _ = client.call("POST", "/tokens.css")
         assert status == 405
-        assert any(a.action == "investigation_resumed" for a in app.store.find(AuditEntry))
+        assert any(a.action == "investigation_resume_requested" for a in app.store.find(AuditEntry))
     finally:
         server.shutdown()
         server.server_close()
@@ -274,11 +274,32 @@ def test_cli_setup_and_serve_commands(tmp_path: Path, capsys, monkeypatch: Any) 
     assert cli.main(["--home", str(home), "setup"]) == 0
     out = capsys.readouterr().out
     assert "#/?token=" in out and (home / "setup-token").exists()
+    assert cli.main(["--home", str(home), "serve", "--host", "0.0.0.0"]) == 1  # noqa: S104 - the refusal under test
+    assert "allow-remote" in capsys.readouterr().err
     App.open(home, extensions=False).auth.create_user("root", "a strong one", is_admin=True)
     assert cli.main(["--home", str(home), "setup"]) == 1
-    served: list[dict[str, Any]] = []
+
+    class FakeServer:
+        url = "http://127.0.0.1:0/"
+
+        class api:  # noqa: N801 - mirrors the attribute
+            setup_token = "tok"
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def shutdown(self) -> None:
+            pass
+
+        def server_close(self) -> None:
+            pass
+
+    made: list[dict[str, Any]] = []
     import k8sholmes.server as server_module
 
-    monkeypatch.setattr(server_module, "serve", lambda app, **kwargs: served.append(kwargs))
+    monkeypatch.setattr(
+        server_module, "make_server", lambda app, **kwargs: made.append(kwargs) or FakeServer()
+    )
     assert cli.main(["--home", str(home), "serve", "--port", "0"]) == 0
-    assert served == [{"host": "127.0.0.1", "port": 0, "allow_remote": False}]
+    assert made == [{"host": "127.0.0.1", "port": 0, "allow_remote": False}]
+    assert "token=tok" in capsys.readouterr().err

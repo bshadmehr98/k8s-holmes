@@ -67,6 +67,7 @@ export async function route() {
     }
     main.replaceChildren(el("div", { class: "state" }, "There is no such page.", el("div", {}, el("a", { href: "#/" }, "Back to Investigate"))));
   } catch (err) {
+    if (err.status === 401) { state.me = null; renderNav(""); return renderSignIn(main, route); }
     main.replaceChildren(el("div", { class: "state error" }, el("strong", {}, "Something went wrong"), el("div", { class: "muted small" }, String(err.message || err))));
     toast(String(err.message || err), "error");
   }

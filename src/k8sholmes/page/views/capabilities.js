@@ -25,7 +25,7 @@ export async function renderCapabilities(main) {
       kv([["class", c.class], ["systems", c.systems.join(", ")], ["permissions", c.permissions.join(", ") || "none"], ["coverage it states", c.coverage.map((x) => coverageBadge(x))], ["origin", c.origin], envId ? ["here", c.available ? "available" : c.why_not] : null].filter(Boolean)),
       el("h3", {}, "Inputs"), el("pre", {}, JSON.stringify(c.inputs.properties || {}, null, 1)),
     );
-    if (envId && hasRole(envId, "operator")) {
+    if (envId && hasRole(envId, "admin")) {
       const settings = c.settings || { enabled: true, namespaces: [], max_items: 500, max_log_bytes: 262144, timeout_ms: 20000 };
       node.append(el("h3", {}, "Settings in this environment"),
         el("form", { class: "stack-sm", onsubmit: async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { await api("PATCH", `/api/environments/${envId}/capabilities/${c.id}`, { enabled: fd.get("enabled") === "on", namespaces: String(fd.get("namespaces") || "").split(",").map((s) => s.trim()).filter(Boolean), max_items: Number(fd.get("max_items")), max_log_bytes: Number(fd.get("max_log_bytes")), timeout_ms: Number(fd.get("timeout_ms")) }); toast("Saved."); await reload(); } catch (err) { toast(err.message, "error"); } } },

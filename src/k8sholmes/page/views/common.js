@@ -23,6 +23,7 @@ export function el(tag, attrs = {}, ...children) {
     if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
     else if (k === "class") node.className = v;
     else if (k === "html") node.innerHTML = v;
+    else if (k.startsWith("aria-")) node.setAttribute(k, String(v));
     else node.setAttribute(k, v === true ? "" : v);
   }
   for (const child of children.flat()) {
@@ -89,16 +90,44 @@ export function roleIn(envId) {
 export const ROLE_ORDER = { viewer: 0, investigator: 1, operator: 2, admin: 3 };
 export function hasRole(envId, needed) { const r = roleIn(envId); return r !== null && ROLE_ORDER[r] >= ROLE_ORDER[needed]; }
 
+function inputFor(field, id) {
+  switch (field.type) {
+    case "textarea":
+      return el("textarea", { id, name: field.name, placeholder: field.placeholder || "", required: field.required }, field.value ?? "");
+    case "select": {
+      const select = el("select", { id, name: field.name });
+      for (const [value, label] of field.options) select.append(el("option", { value, selected: value === field.value }, label));
+      return select;
+    }
+    case "checkbox":
+      return el("input", { id, name: field.name, type: "checkbox", checked: field.value });
+    default:
+      return el("input", { id, name: field.name, type: field.type || "text", placeholder: field.placeholder || "", required: field.required, value: field.value ?? "" });
+  }
+}
+
 export function form(fields, onsubmit, submitLabel = "Save") {
-  const f = el("form", { class: "stack-sm", onsubmit: async (e) => { e.preventDefault(); const data = Object.fromEntries(new FormData(f).entries()); f.querySelector("button[type=submit]").disabled = true; try { await onsubmit(data, f); } catch (err) { toast(err.message, "error"); } finally { const b = f.querySelector("button[type=submit]"); if (b) b.disabled = false; } } });
+  const f = el("form", { class: "stack-sm" });
+  async function submit(e) {
+    e.preventDefault();
+    const button = f.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      await onsubmit(Object.fromEntries(new FormData(f).entries()), f);
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+  f.addEventListener("submit", submit);
   for (const field of fields) {
     const id = `f-${field.name}-${Math.random().toString(36).slice(2, 7)}`;
-    let input;
-    if (field.type === "textarea") input = el("textarea", { id, name: field.name, placeholder: field.placeholder || "", required: field.required });
-    else if (field.type === "select") { input = el("select", { id, name: field.name }); for (const [v, label] of field.options) input.append(el("option", { value: v, selected: v === field.value }, label)); }
-    else if (field.type === "checkbox") input = el("input", { id, name: field.name, type: "checkbox", checked: field.value });
-    else input = el("input", { id, name: field.name, type: field.type || "text", placeholder: field.placeholder || "", required: field.required, value: field.value ?? "" });
-    f.append(el("div", { class: "field" }, el("label", { for: id }, field.label), input, field.help ? el("div", { class: "faint xs" }, field.help) : null));
+    f.append(el("div", { class: "field" },
+      el("label", { for: id }, field.label),
+      inputFor(field, id),
+      field.help ? el("div", { class: "faint xs" }, field.help) : null,
+    ));
   }
   f.append(el("div", { class: "row" }, el("button", { class: "btn primary", type: "submit" }, submitLabel)));
   return f;

@@ -50,10 +50,12 @@ src/k8sholmes/
   knowledge.py                     knowledge notes and exceptions: scope, exact matching, expiry, revocation, revisions
   models.py                        the Model port, the OpenAI-compatible client, the capability tests, usage and secrets
   app.py  cli.py                   the composition root (home, store, auth, registry, engine, the demo); the command line
-  server.py  api.py  runner.py     the standard-library web server and static page; the JSON API (session, role and environment on every route); background runs and the event bus
+  server.py  runner.py             the standard-library web server and static page with the event stream; background runs and their events
+  api/                             the JSON API: dispatch and the checks (__init__), account, environments (and capabilities), investigations (and evidence, findings), knowledge, settings
+  reports.py                       the plain-text report and the export shape the CLI and the API share (the report kinds of §10 arrive with M3)
   page/                            the interface: index.html, tokens.css, app.css, app.js and views/*.js; no build step
   testing/                         FakeCluster, RecordedCluster, ScriptedModel, the contract checker, the demo cluster and the demo model
-  (planned)                        reports.py, proposals.py, saved.py (M3)
+  (planned)                        proposals.py, saved.py (M3)
 tests/unit|contract|integration|e2e   default suite; tests/cluster|hosted: by hand, marked
 design/                why and how: README, current.md, changes/, decisions.md, history/
 docs/  examples/       user docs and runnable examples, both executed by tests once they exist

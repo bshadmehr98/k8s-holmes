@@ -3,10 +3,7 @@
 import json
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Iterator
-from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -17,61 +14,9 @@ from k8sholmes.app import App
 from k8sholmes.errors import InvalidInput
 from k8sholmes.records import AuditEntry, Grant
 from k8sholmes.server import make_server, serve_in_thread
+from tests.helpers import Client
 from tests.integration.test_openai_client import MODE
 from tests.integration.test_openai_client import Handler as FakeModelHandler
-
-
-class Client:
-    def __init__(self, base: str) -> None:
-        self.base = base
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
-
-    def call(self, method: str, path: str, body: Any = None) -> tuple[int, Any]:
-        data = json.dumps(body).encode() if body is not None else None
-        request = urllib.request.Request(  # noqa: S310
-            self.base + path,
-            data=data,
-            method=method,
-            headers={"Content-Type": "application/json"} if data else {},
-        )
-        try:
-            with self.opener.open(request, timeout=30) as response:
-                raw = response.read()
-                return response.status, (
-                    json.loads(raw)
-                    if response.headers.get("Content-Type", "").startswith("application/json")
-                    else raw.decode()
-                )
-        except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            try:
-                return exc.code, json.loads(raw)
-            except json.JSONDecodeError:
-                return exc.code, raw.decode()
-
-    def ok(self, method: str, path: str, body: Any = None) -> Any:
-        status, payload = self.call(method, path, body)
-        assert status < 300, (status, payload)
-        return payload
-
-    def sse(self, path: str, limit: int = 20, timeout: float = 30) -> list[tuple[str, dict[str, Any]]]:
-        request = urllib.request.Request(self.base + path)  # noqa: S310
-        events: list[tuple[str, dict[str, Any]]] = []
-        with self.opener.open(request, timeout=timeout) as response:
-            kind = ""
-            deadline = time.monotonic() + timeout
-            while len(events) < limit and time.monotonic() < deadline:
-                raw = response.readline()
-                if not raw:
-                    break  # the server ended the stream
-                line = raw.decode().rstrip("\n")
-                if line.startswith("event:"):
-                    kind = line[6:].strip()
-                elif line.startswith("data:"):
-                    events.append((kind, json.loads(line[5:])))
-                    if kind in ("concluded", "failed"):
-                        break
-        return events
 
 
 @pytest.fixture

@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from k8sholmes.errors import InvalidInput, NotFound, PermissionRefused
@@ -155,3 +156,14 @@ class Auth:
         )
         self.store.put(entry)
         return entry
+
+
+def setup_token(home: Path) -> str:
+    """The one-time token that creates the first administrator; made on first read, kept until used."""
+    path = home / "setup-token"
+    if path.exists() and path.read_text().strip():
+        return path.read_text().strip()
+    token = secrets.token_urlsafe(24)
+    path.write_text(token)
+    path.chmod(0o600)
+    return token

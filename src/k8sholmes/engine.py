@@ -55,7 +55,7 @@ class Engine:
         registry: Registry,
         *,
         cluster_for: Callable[[Environment], Cluster],
-        model_for: Callable[[Investigation], Model],
+        model_for: Callable[[str | None], Model],
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -187,15 +187,15 @@ class Engine:
     def _run_phases(
         self, inv: Investigation, user: User, phases: tuple[Phase, ...], *, follow_up: bool = False
     ) -> Investigation:
-        model = self.model_for(inv)
-        environment = self.store.get(Environment, inv.environment_id)
-        cluster = self.cluster_for(environment)
-        if environment.connected_at is None:
-            environment = connect(
-                self.store, environment, cluster
-            )  # the permission matrix decides availability (§4.1)
         started = self.clock()
         try:
+            model = self.model_for(inv.model_endpoint_id)
+            environment = self.store.get(Environment, inv.environment_id)
+            cluster = self.cluster_for(environment)
+            if environment.connected_at is None:
+                environment = connect(
+                    self.store, environment, cluster
+                )  # the matrix decides availability (§4.1)
             for phase in phases:
                 inv = self.store.get(Investigation, inv.id)
                 if inv.status == "cancelled":

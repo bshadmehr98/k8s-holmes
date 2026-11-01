@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from k8sholmes import __version__, server
-from k8sholmes.api import Api
 from k8sholmes.app import App, default_home
+from k8sholmes.auth import setup_token
 from k8sholmes.errors import K8sHolmesError
 from k8sholmes.records import Environment, Evidence, Investigation, Scope, User
 from k8sholmes.reports import investigation_json, report_text
-from k8sholmes.runner import Runner
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -205,7 +204,20 @@ def _export(app: App, args: argparse.Namespace) -> int:
 
 
 def _serve(app: App, args: argparse.Namespace) -> int:
-    server.serve(app, host=args.host, port=args.port, allow_remote=args.allow_remote)
+    made = server.make_server(app, host=args.host, port=args.port, allow_remote=args.allow_remote)
+    print(f"K8sHolmes is at {made.url}", file=sys.stderr)
+    if made.api.setup_token:
+        print(
+            f"first start: create the administrator at {made.url}#/?token={made.api.setup_token}",
+            file=sys.stderr,
+        )
+    try:
+        made.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        made.shutdown()
+        made.server_close()
     return 0
 
 
@@ -213,8 +225,8 @@ def _setup(app: App, args: argparse.Namespace) -> int:
     if not app.auth.needs_setup():
         print("this K8sHolmes is set up already; an administrator adds users in Settings", file=sys.stderr)
         return 1
-    api = Api(app, Runner(app.engine))
-    print(f"start the server, then open http://127.0.0.1:8800/#/?token={api.setup_token}")
+    token = setup_token(app.home)
+    print(f"start the server, then open http://127.0.0.1:8800/#/?token={token}")
     print(
         f"(the token is also in {app.home / 'setup-token'}; the server prints this link on its first start)"
     )

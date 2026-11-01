@@ -129,7 +129,7 @@ export async function renderInvestigation(main, id) {
     const actions = el("div", { class: "row" });
     const transitions = { open: ["acknowledged", "fixed"], acknowledged: ["open", "fixed"], accepted_risk: ["open"], fixed: ["verified", "open"], verified: ["open"] }[f.state] || [];
     if (can) for (const s of transitions) actions.append(el("button", { class: "btn sm", onclick: async () => { try { await api("PATCH", `/api/findings/${f.id}`, { state: s }); await refresh(); } catch (err) { toast(err.message, "error"); } } }, s === "verified" ? "Mark verified (cite evidence)" : `Mark ${s.replace("_", " ")}`));
-    if (can && f.state !== "accepted_risk") actions.append(el("button", { class: "btn sm", onclick: () => acceptDialog(f) }, "Accept as intentional"));
+    if (can && ["open", "acknowledged"].includes(f.state)) actions.append(el("button", { class: "btn sm", onclick: () => acceptDialog(f) }, "Accept as intentional"));
     const exception = f.exception_id ? el("div", { class: "notice ok" }, "Accepted as intentional: exception ", el("a", { href: "#/knowledge" }, el("span", { class: "mono xs" }, f.exception_id))) : f.exception_note ? el("div", { class: "notice" }, f.exception_note) : null;
     return el("div", { class: "inspector stack-sm" },
       el("div", { class: "row" }, el("span", { class: `badge ${KIND_BADGE[f.kind] || ""}` }, f.kind), el("span", { class: `badge ${STATE_BADGE[f.state] || ""}` }, f.state.replace("_", " ")), el("span", { class: "mono xs muted" }, f.condition)),
@@ -176,10 +176,23 @@ export async function renderInvestigation(main, id) {
     if (!["running", "queued"].includes(inv().status)) return;
     stream = new EventSource(`/api/investigations/${id}/events`);
     let timer = null;
-    stream.onmessage = () => { clearTimeout(timer); timer = setTimeout(() => refresh().then(() => { if (!["running", "queued"].includes(inv().status) && stream) { stream.close(); stream = null; } }), 150); };
+    const onEvent = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => refresh().then(() => {
+        if (!["running", "queued"].includes(inv().status) && stream) { stream.close(); stream = null; }
+      }), 150);
+    };
+    // the server names every event; EventSource.onmessage would only hear unnamed ones
+    for (const kind of ["status", "step", "call", "model_call", "concluded", "failed"]) stream.addEventListener(kind, onEvent);
     stream.onerror = () => { if (stream) { stream.close(); stream = null; setTimeout(() => { if (location.hash.endsWith(id)) refresh().then(listen); }, 2000); } };
   }
 
+  const onLeave = () => {
+    if (location.hash.endsWith(id)) return;
+    if (stream) { stream.close(); stream = null; }
+    window.removeEventListener("hashchange", onLeave);
+  };
+  window.addEventListener("hashchange", onLeave);
   draw();
   listen();
 }
