@@ -103,6 +103,14 @@ After three consecutive invalid calls the engine stops gathering, adds the limit
 form valid inputs for <capability>", and concludes with what it has (`partial`), instead of spending the
 remaining budget.
 
+The user is told plainly, not only through the limitation list. The investigation page shows a notice at
+the top of the activity and of the report: "The model stopped gathering: it sent invalid inputs for
+`k8s.list` three times in a row. The answer below uses only the evidence gathered before that. A stronger
+model, or `structured` tool mode, may do better." It links the three refused calls, each with what the
+model sent and why it was refused, and offers **Resume** (the next attempt gets a fresh count of three)
+and **Change model**. The same text is the first line of `investigate`'s output on the command line, and
+the event stream carries it as a `stopped_invalid` event, so the notice appears while the run is live.
+
 ### 3. Known values instead of free text
 
 The input schema a model sees is computed per investigation from the environment:
@@ -210,7 +218,8 @@ the rest, so it does not grow.
 26. **Errors teach.** An invalid call's tool message names the field, lists the accepted fields and
     suggests the closest field or known value; it is plain text.
 27. **A stuck model stops.** Three consecutive invalid calls end gathering with a limitation naming the
-    capability; the investigation is `partial`, not `failed`.
+    capability; the investigation is `partial`, not `failed`; the investigation page, the report, the
+    command line and the event stream show the notice of part 2 with the refused calls.
 28. **Known values.** The schema a model sees lists the inventory's namespaces within the allow-list and
     the served kinds; a namespace outside the allow-list is refused by validation whatever the model
     sends; the framing's intended capabilities are available ids.
@@ -288,10 +297,14 @@ Build order, each piece its own branch with its own checks:
 
 ## Open questions for the maintainer
 
-1. **The default mode:** `auto` (structured whenever the structured test passed) as proposed, or `native`
-   until a user opts in?
-2. **Two steps or one** in structured mode: choose then fill (proposed; smaller decisions, two calls), or
-   one union schema (one call, a larger grammar)?
+Answered by the maintainer on 2026-11-22:
+
+1. **The default mode:** `auto`, as proposed.
+2. **Two steps or one:** two steps, choose then fill, as proposed.
+4. **The stuck-model limit:** three consecutive invalid calls, and the user must see clearly why gathering
+   stopped and what to do next (the notice in part 2).
+
+Still open:
+
 3. **The first playbooks:** `unused`, `restarts`, `exposure`, `what_changed`; add or drop any?
-4. **The stuck-model limit:** three consecutive invalid calls?
 5. **Order:** build piece A first, right after milestone 4 is merged?
