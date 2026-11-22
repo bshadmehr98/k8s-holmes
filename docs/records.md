@@ -7,11 +7,11 @@ are ISO-8601 UTC.
 
 | Record | Table | What it is |
 |---|---|---|
-| `Environment` | `environments` | a cluster context (or a recording), its settings, its permission matrix |
+| `Environment` | `environments` | a cluster context (or a recording), its settings, its permission matrix, the kinds it serves |
 | `Inventory` | `inventories` | a snapshot of what the environment holds, with relationships and their basis |
 | `User`, `Session`, `AuditEntry` | `users`, `sessions`, `audit` | local accounts with roles per environment, sign-ins, the audit log |
 | `ModelEndpoint`, `ModelCall`, `CapabilityTestResult` | `model_endpoints`, `model_calls`, … | an OpenAI-compatible endpoint, each call's usage, the capability tests |
-| `Investigation`, `Message`, `Step`, `Call`, `Evidence` | `investigations`, `messages`, `steps`, `calls`, `evidence` | a question and everything done to answer it; evidence carries its coverage, redactions and retention |
+| `Investigation`, `Message`, `Step`, `Call`, `Evidence` | `investigations`, `messages`, `steps`, `calls`, `evidence` | a question and everything done to answer it, with its notices (such as why gathering stopped); a call keeps its canonical inputs and, in `received`, what the model sent when that differs; evidence carries its coverage, redactions and retention |
 | `Finding` | `findings` | an observation, hypothesis or conclusion with the evidence for and against it, its state and revisions |
 | `AcceptedException`, `Knowledge` | `exceptions`, `knowledge` | what the team accepted as intentional, what the team knows |
 | `Report`, `Share` | `reports`, `shares` | a report revision with its sections, numbers and edits; a view-only link (the token's hash only) |

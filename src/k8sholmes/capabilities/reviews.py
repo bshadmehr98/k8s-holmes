@@ -7,7 +7,7 @@ cluster cannot know (traffic outside it, whether an alert fired) is `cannot_answ
 from __future__ import annotations
 
 import re
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,7 @@ OUTSIDE = (
 
 
 class ScopeInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespaces": "namespaces"}
     namespaces: list[str] = Field(
         default=[], description="Namespaces to review; empty means every namespace the permissions allow."
     )
@@ -110,6 +111,7 @@ def run_network_exposure(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class ServiceInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespace": "namespaces"}
     name: str
     namespace: str
 

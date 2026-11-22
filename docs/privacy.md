@@ -18,7 +18,8 @@ administrator can disable any capability or restrict it to namespaces per enviro
 
 ## What a model receives
 
-The system prompt, the question, the scope and the catalog of capabilities it may use; then each
+The system prompt, the question, the scope and the catalog of capabilities it may use, with the kinds the
+cluster serves and its namespaces as the values their inputs accept; then each
 capability's result as a tool message, after the redactor and the size cap, and the team's knowledge notes
 as context (never as evidence). The prompt says that tool results are data: nothing a model says can run a
 capability the gate refuses, and an instruction planted in a log line produces a refused call that is

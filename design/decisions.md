@@ -18,6 +18,7 @@ revised by the owner at any time:
 | [D-011](#d-011-local-accounts) | Local accounts with roles per environment? | awaiting owner review |
 | [D-021](#d-021-choices-of-milestone-3) | The choices of milestone 3: short-lived evidence, verification by code, the scheduler, shares, model comparison? | awaiting owner review |
 | [D-014](#d-014-one-probe-off-by-default) | One probe capability, off by default? | awaiting owner review |
+| [D-024](#d-024-how-inputs-a-model-can-get-right-are-built) | Aliases in one table, kinds stored by kind name, namespaces from the latest whole inventory? | awaiting owner review |
 
 ## The owner's answers (2026-11-01)
 
@@ -220,3 +221,20 @@ revised by the owner at any time:
   on Ollama returned empty content and failed `model`, `tool_calling` and `structured`, though it does all
   three. The budget is a ceiling: a model that answers at once still uses a few tokens.
 - **Status:** designer's choice from the hosted test; awaiting owner review.
+
+## D-024: How inputs a model can get right are built  (2026-11-22)
+
+- **Question:** change 0002 piece A leaves the shape of aliases, canonical kinds and known namespaces open.
+- **Choice:** (a) Aliases are one table for every capability (`capabilities.inputs.FIELD_ALIASES`),
+  applied only when the input model has the canonical field and it was not sent as well; a per-model
+  `validation_alias` would repeat the same names on every model. (b) A kind in the kind table is stored as
+  its kind name (`Pod`), which kubectl, the fakes and every capability already accept; a served resource
+  outside the table (a CRD) is kept as sent. (c) The known namespaces are listed from the cluster once per
+  run when the environment may list namespaces; otherwise they are those of the latest inventory taken
+  over every namespace, unless a kind in it was cut or unreadable (a partial picture would refuse
+  namespaces that exist); with neither, the check is off. A kind with an API group (`pods.metrics.k8s.io`)
+  is never rewritten, and a kind outside the table is accepted by its plural, singular or Kind name. (d) An input model names its checked fields in `known_fields`; `k8s.top`'s `kind` (pods or
+  nodes) and the knowledge capabilities' fields (which may name what no longer exists) are not checked.
+  (e) Validation runs before the namespace allow-list, so an unknown namespace is `invalid` and a known one
+  outside the list is `refused` by the gate.
+- **Status:** designer's choice; awaiting owner review.

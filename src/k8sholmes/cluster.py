@@ -57,6 +57,12 @@ def canonical_kind(kind: str) -> str:
     return _ALIASES.get(key, kind[0].upper() + kind[1:])
 
 
+def table_kind(kind: str) -> str | None:
+    """The kind table's name for `kind` (`po`, `pods`, `Pod` -> `Pod`), or None for a kind it does not
+    know, such as a CRD."""
+    return _ALIASES.get(kind.partition(".")[0].lower())
+
+
 def plural_of(kind: str) -> str:
     """The plural kubectl lists a kind by (`ingresses`, `networkpolicies`)."""
     return KIND_TABLE.get(kind, (kind.lower() + "s",))[0]

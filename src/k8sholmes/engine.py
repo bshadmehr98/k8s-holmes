@@ -15,6 +15,7 @@ from k8sholmes import findings as findings_mod
 from k8sholmes import knowledge, thread
 from k8sholmes.auth import Auth
 from k8sholmes.capabilities import Capability, Context, Registry
+from k8sholmes.capabilities.inputs import known_for
 from k8sholmes.cluster import Cluster
 from k8sholmes.environments import connect
 from k8sholmes.errors import InvestigationStateError, ModelFailure
@@ -30,6 +31,7 @@ from k8sholmes.records import (
     Investigation,
     Message,
     ModelCall,
+    Notice,
     Period,
     Phase,
     Scope,
@@ -41,6 +43,7 @@ from k8sholmes.records import (
 from k8sholmes.store import Store
 
 RETRY_BACKOFF_S = (1.0, 3.0)
+STUCK_AFTER = 3  # consecutive invalid calls that end gathering (0002, part 2)
 RESUMABLE = ("cancelled", "interrupted", "partial", "failed")
 EventHook = Callable[[str, dict[str, Any]], None]
 
@@ -137,6 +140,24 @@ class Engine:
         )
         return self.run(investigation_id, user)
 
+    def change_model(self, investigation_id: str, user: User, endpoint_id: str) -> Investigation:
+        """A user's choice of another endpoint for the rest of an investigation, recorded in the thread and
+        the audit log (design §13.3); the caller checks the endpoint is usable."""
+        inv = self.store.get(Investigation, investigation_id)
+        self.auth.require(user, inv.environment_id, "investigator")
+        if endpoint_id == inv.model_endpoint_id:
+            return inv
+        note = f"{user.username} changed the model endpoint from {inv.model_endpoint_id} to {endpoint_id}."
+        self._append(inv, "user", note, author=f"user:{user.id}", round_=self._round(inv))
+        self.auth.audit(
+            user.id,
+            "investigation_model_changed",
+            environment_id=inv.environment_id,
+            subject=f"investigation:{inv.id}",
+            details={"from": inv.model_endpoint_id, "to": endpoint_id},
+        )
+        return self._update(inv, model_endpoint_id=endpoint_id)
+
     def follow_up(self, investigation_id: str, user: User, message: str) -> Investigation:
         """A user's message, context or requested check: another round of gathering and concluding (§6.1)."""
         inv = self.store.get(Investigation, investigation_id)
@@ -153,7 +174,8 @@ class Engine:
             environment_id=inv.environment_id,
             subject=f"investigation:{inv.id}",
         )
-        inv = self._update(inv, status="running")
+        stale = [n.model_copy(update={"superseded": True}) for n in inv.notices]
+        inv = self._update(inv, status="running", notices=stale)
         return self._run_phases(inv, user, ("gathering", "concluding"), follow_up=True)
 
     def mark_interrupted(self) -> list[Investigation]:
@@ -172,7 +194,8 @@ class Engine:
         inv = self.store.get(Investigation, investigation_id)
         if inv.status not in ("queued", *RESUMABLE):
             raise InvestigationStateError(f"investigation {inv.id} is {inv.status}")
-        inv = self._update(inv, status="running")
+        stale = [n.model_copy(update={"superseded": True}) for n in inv.notices]  # a new run, a new count
+        inv = self._update(inv, status="running", notices=stale)
         phases: list[Phase] = []
         if inv.framing is None:
             phases.append("framing")
@@ -201,7 +224,7 @@ class Engine:
                 if inv.status == "cancelled":
                     return inv
                 if phase == "framing":
-                    inv = self._framing(inv, model)
+                    inv = self._framing(inv, model, [c.id for c in self._capabilities(environment, user)[0]])
                 elif phase == "discovery":
                     inv = self._discovery(inv, environment, cluster, user)
                 elif phase == "gathering":
@@ -228,11 +251,10 @@ class Engine:
 
     # phases
 
-    def _framing(self, inv: Investigation, model: Model) -> Investigation:
+    def _framing(self, inv: Investigation, model: Model, capability_ids: list[str]) -> Investigation:
         step = self._begin_step(inv, "framing")
-        reply, inv = self._call_model(
-            inv, model, "framing", thread.framing_prompt(inv), schema=thread.FRAMING_SCHEMA
-        )
+        schema = thread.framing_schema(capability_ids)
+        reply, inv = self._call_model(inv, model, "framing", thread.framing_prompt(inv), schema=schema)
         payload = thread.json_object(reply.content)
         limitations = (
             inv.limitations
@@ -243,6 +265,11 @@ class Engine:
             ]
         )
         framing = thread.framing_from(payload, inv)
+        framing = framing.model_copy(
+            update={
+                "intended_capabilities": [c for c in framing.intended_capabilities if c in capability_ids]
+            }
+        )
         inv = self._update(inv, framing=framing, limitations=limitations)
         self._end_step(inv, step, f"framed: {framing.question}")
         return inv
@@ -287,8 +314,16 @@ class Engine:
         started: float,
     ) -> Investigation:
         available, unavailable = self._capabilities(environment, user)
-        tools = [tool_definition(c.id, f"{c.title}. {c.purpose}", c.schema()) for c in available]
         ctx = self._context(inv, environment, cluster, user)
+        tools = [
+            tool_definition(
+                c.id,
+                f"{c.title}. {c.purpose}",
+                c.schema(ctx.known, self.registry.settings_for(c, environment).namespaces),
+            )
+            for c in available
+        ]
+        streak: list[Call] = []  # the latest consecutive invalid calls
         while True:
             inv = self.store.get(Investigation, inv.id)
             if inv.status == "cancelled":
@@ -311,14 +346,36 @@ class Engine:
             if not reply.tool_calls:
                 self._end_step(inv, step, "the model has what it needs")
                 return self.store.get(Investigation, inv.id)
-            summaries = self._run_tool_calls(inv, step, reply.tool_calls, ctx, round_)
+            summaries, calls = self._run_tool_calls(inv, step, reply.tool_calls, ctx, round_)
             self._end_step(inv, step, "; ".join(summaries))
+            for call in calls:
+                streak = [*streak, call] if call.status == "invalid" else []
+            if len(streak) >= STUCK_AFTER:
+                return self._stop_invalid(inv, streak[-STUCK_AFTER:])
+
+    def _stop_invalid(self, inv: Investigation, last: list[Call]) -> Investigation:
+        """The model sent invalid inputs again and again: stop gathering and say so plainly (0002, part 2)."""
+        capability = ", ".join(sorted({c.capability_id for c in last}))
+        text = (
+            f"The model stopped gathering: it sent invalid inputs ({capability}) {STUCK_AFTER} times in a "
+            "row. The answer below uses only the evidence gathered before that. A stronger model, or the "
+            "structured tool mode, may do better; resume to try again."
+        )
+        notice = Notice(kind="stopped_invalid", text=text, call_ids=[c.id for c in last])
+        fresh = self.store.get(Investigation, inv.id)
+        limitation = f"the model could not form valid inputs for {capability}"
+        updated = self._update(
+            fresh, notices=[*fresh.notices, notice], limitations=[*fresh.limitations, limitation]
+        )
+        self._emit("stopped_invalid", {"investigation_id": inv.id, "notice": notice.model_dump(mode="json")})
+        return updated
 
     def _run_tool_calls(
         self, inv: Investigation, step: Step, tool_calls: list[ToolCall], ctx: Context, round_: int
-    ) -> list[str]:
+    ) -> tuple[list[str], list[Call]]:
         """Run each requested capability through the gate; record the call, the evidence, the tool message."""
         summaries: list[str] = []
+        calls: list[Call] = []
         for tool_call in tool_calls[: inv.budgets.calls_per_step]:
             call, evidence = self.registry.execute(
                 tool_call.name, tool_call.arguments, ctx, self.auth, step_id=step.id
@@ -335,6 +392,7 @@ class Engine:
                     tool_call_id=tool_call.id,
                     round_=round_,
                 )
+            calls.append(call)
             detail = f" ({evidence.coverage})" if evidence else f" ({call.reason[:80]})"
             summaries.append(f"{tool_call.name}: {call.status}{detail}")
             if call.status == "refused":
@@ -351,7 +409,7 @@ class Engine:
                 round_=round_,
             )
             summaries.append(f"{skipped.name}: not run (call budget)")
-        return summaries
+        return summaries, calls
 
     def _concluding(
         self, inv: Investigation, model: Model, environment: Environment, user: User, *, follow_up: bool
@@ -454,6 +512,7 @@ class Engine:
             user=user,
             investigation_id=inv.id,
             period=framing.period,
+            known=known_for(self.store, environment, cluster),
         )
 
     def _call_model(

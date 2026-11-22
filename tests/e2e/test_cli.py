@@ -91,3 +91,34 @@ def test_an_investigation_that_fails_exits_1(tmp_path: Path, capsys, monkeypatch
     monkeypatch.setattr(cli.App, "open", patched_open)
     assert main(["--home", str(home), "investigate", "x", "--env", "demo"]) == 1
     assert "failed" in capsys.readouterr().out
+
+
+def test_investigate_shows_why_gathering_stopped_first(tmp_path: Path, capsys, monkeypatch) -> None:
+    """Guarantee 27 on the command line: the notice live on stderr, first in the report, in --json."""
+    from k8sholmes import cli
+    from k8sholmes.testing import ScriptedModel
+    from k8sholmes.testing.model import calls, structured
+
+    home = tmp_path / "home"
+    assert main(["--home", str(home), "demo"]) == 0
+    capsys.readouterr()
+    empty = {"answer": "a", "findings": [], "limitations": [], "next_steps": [], "knowledge_used": []}
+
+    def script(messages, tools, schema):
+        return structured(empty) if schema else calls(("k8s.list", {"kind": "pods", "class": "none"}))
+
+    original_open = cli.App.open
+
+    def patched_open(*args, **kwargs):
+        app = original_open(*args, **kwargs)
+        app.engine.model_for = lambda inv: ScriptedModel(script=script)
+        return app
+
+    monkeypatch.setattr(cli.App, "open", patched_open)
+    assert main(["--home", str(home), "investigate", "what runs?", "--env", "demo"]) == 0
+    out, err = capsys.readouterr()
+    assert "NOTICE: The model stopped gathering" in err
+    assert out.split("## ")[1].startswith("Notice")
+    assert main(["--home", str(home), "investigate", "what runs?", "--env", "demo", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["investigation"]["notices"][0]["kind"] == "stopped_invalid"

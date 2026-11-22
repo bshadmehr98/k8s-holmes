@@ -45,6 +45,14 @@ CONCLUDE_INSTRUCTION = (
 )
 
 
+def framing_schema(capability_ids: list[str]) -> dict[str, Any]:
+    """The framing schema with the intended capabilities limited to the available ids (0002, part 3)."""
+    schema = json.loads(json.dumps(FRAMING_SCHEMA))
+    if capability_ids:
+        schema["properties"]["intended_capabilities"]["items"] = {"type": "string", "enum": capability_ids}
+    return schema
+
+
 def framing_prompt(inv: Investigation) -> list[dict[str, Any]]:
     period_text = inv.period.rule or (inv.period.start.isoformat() if inv.period.start else "not given")
     prompt = (
@@ -225,8 +233,8 @@ def _shrink_list(data: list[Any], limit: int) -> list[Any]:
 
 def tool_message(call: Call, evidence: Evidence | None) -> str:
     """A capability's result as the model sees it: the evidence id, coverage and the data cut to size."""
-    if evidence is None:
-        return json.dumps({"status": call.status, "error": call.reason})
+    if evidence is None:  # plain text, not JSON a model could mistake for arguments (0002, part 2)
+        return f"Not run ({call.status}). {call.reason}"
     payload = {
         "evidence_id": evidence.id,
         "status": call.status,

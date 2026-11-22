@@ -15,6 +15,19 @@ Nothing writes to a cluster in 0.1.
 | `probe` | operator, when the environment enables probes | an active test that sends traffic (one HTTP request) |
 | `change` | nobody in 0.1 | would change infrastructure; refused unless the environment's authorization path is set (§11.3), and no built-in exists |
 
+## Inputs
+
+Every capability's inputs are checked before anything runs. A model that gets them wrong is told how to
+fix them, in plain words: the field, the accepted fields, and the closest field or value ("namespace
+'lmx-prod' is not a namespace in this environment; did you mean 'lms-prod'?"). A few names models often use
+are accepted: `label_selector` or `labels` for `selector`, `ns` for `namespace`, `resource_name` for
+`name`, and any of kubectl's names for a kind (`po`, `pods`, `Pod`); the call keeps what the model sent.
+The kinds the cluster serves and its namespaces (listed when an investigation gathers, or taken from the
+latest complete inventory when the cluster refuses to list namespaces) are offered to the model as the
+values a `kind` or `namespace` accepts, and a name outside them is refused with the closest suggestion; a
+CRD the cluster serves is accepted by any name kubectl takes. Three invalid calls
+in a row stop gathering with a notice that says why, and the investigation concludes with what it has.
+
 ## Coverage
 
 Every result states what it could know: `observed` (it saw the thing), `observed_absent` (it looked where

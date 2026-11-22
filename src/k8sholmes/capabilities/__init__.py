@@ -13,11 +13,12 @@ import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from k8sholmes.auth import Auth
+from k8sholmes.capabilities.inputs import Known, canonical, explain, schema_for, unknown_values
 from k8sholmes.cluster import Cluster
 from k8sholmes.errors import ClusterUnreachable, InvalidInput, NotFound, PermissionRefused
 from k8sholmes.evidence import Result, evidence_from_result, redact_text
@@ -45,6 +46,8 @@ class Inputs(BaseModel):
     """The base of every capability's input model: unknown fields are refused (guarantee 2)."""
 
     model_config = ConfigDict(extra="forbid")
+    # fields whose values must exist in the environment: "kinds" or "namespaces" (0002, part 3)
+    known_fields: ClassVar[dict[str, str]] = {}
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,7 @@ class Context:
     settings: CapabilitySettings = field(default_factory=CapabilitySettings)
     investigation_id: str | None = None
     period: Period = field(default_factory=Period)
+    known: Known | None = None  # the environment's kinds and namespaces, checked by validation (0002)
 
 
 @dataclass(frozen=True)
@@ -78,11 +82,10 @@ class Capability:
         "investigation"  # how long its evidence lives (§7.1, §16.3)
     )
 
-    def schema(self) -> dict[str, Any]:
-        """The JSON schema the model sees as the tool's parameters."""
-        schema = self.inputs.model_json_schema()
-        schema.pop("title", None)
-        return schema
+    def schema(self, known: Known | None = None, allow: list[str] | None = None) -> dict[str, Any]:
+        """The JSON schema the model sees as the tool's parameters; with `known`, the environment's kinds
+        and namespaces (within the allow-list `allow`) are listed as the allowed values."""
+        return schema_for(self.inputs, known, allow or [])
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -134,15 +137,26 @@ class Registry:
     # validation and the gate
 
     @staticmethod
-    def validate(cap: Capability, raw: dict[str, Any]) -> BaseModel:
-        """Validated inputs, or `InvalidInput` naming the field (guarantee 2)."""
+    def validate(
+        cap: Capability, raw: dict[str, Any], known: Known | None = None, allow: list[str] | None = None
+    ) -> BaseModel:
+        """Validated inputs, or `InvalidInput` naming every wrong field, listing the accepted fields and
+        suggesting the closest field or value (guarantee 2; 0002, part 2)."""
+        problems: list[tuple[str, str, bool]] = [
+            (name, message, False)
+            for name, message in unknown_values(cap.inputs, raw, known or Known(), allow or [])
+        ]
         try:
-            return cap.inputs.model_validate(raw)
+            inputs = cap.inputs.model_validate(raw)
         except ValidationError as exc:
-            problems = "; ".join(
-                f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in exc.errors()
-            )
-            raise InvalidInput(f"{cap.id}: invalid inputs ({problems})") from None
+            problems = [
+                (".".join(str(p) for p in e["loc"]) or "input", str(e["msg"]), e["type"] == "extra_forbidden")
+                for e in exc.errors()
+            ] + problems
+            raise InvalidInput(explain(cap.id, cap.inputs, problems)) from None
+        if problems:
+            raise InvalidInput(explain(cap.id, cap.inputs, problems))
+        return inputs
 
     @staticmethod
     def settings_for(cap: Capability, environment: Environment) -> CapabilitySettings:
@@ -239,12 +253,15 @@ class Registry:
     ) -> tuple[Call, Evidence | None]:
         """Validate, gate, run and record. A capability's own failure never raises: it is recorded."""
 
+        sent = raw_inputs
+
         def call(status: str, reason: str = "", duration_ms: int = 0) -> Call:
             return Call(
                 investigation_id=ctx.investigation_id or "",
                 step_id=step_id or "",
                 capability_id=capability_id,
                 inputs=raw_inputs,
+                received=sent if sent != raw_inputs else None,
                 user_id=ctx.user.id,
                 status=status,  # type: ignore[arg-type]
                 reason=redact_text(reason)[0],
@@ -255,14 +272,15 @@ class Registry:
             cap = self.get(capability_id)
         except NotFound as exc:
             return call("invalid", str(exc)), None
+        raw_inputs = canonical(cap.inputs, raw_inputs)  # `call` records the canonical inputs from here
         refusal = self.refusal(cap, ctx.user, ctx.environment, auth)
         if refusal is not None:
             return self._refused(call, cap, refusal, ctx, auth), None
+        settings = self.settings_for(cap, ctx.environment)
         try:
-            inputs = self.validate(cap, raw_inputs)
+            inputs = self.validate(cap, raw_inputs, ctx.known, settings.namespaces)
         except InvalidInput as exc:
             return call("invalid", str(exc)), None
-        settings = self.settings_for(cap, ctx.environment)
         refusal = self.namespace_refusal(cap, inputs, settings)
         if refusal is not None:
             return self._refused(call, cap, refusal, ctx, auth), None

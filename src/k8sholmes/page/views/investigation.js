@@ -5,6 +5,7 @@ let stream = null;
 export async function renderInvestigation(main, id) {
   if (stream) { stream.close(); stream = null; }
   let bundle = await api("GET", `/api/investigations/${id}`);
+  const endpoints = (await api("GET", "/api/models").catch(() => ({ endpoints: [] }))).endpoints;
   let extra = { proposals: null, reports: null }; // loaded when their tabs open
   const inv = () => bundle.investigation;
   const envId = inv().environment_id;
@@ -26,6 +27,35 @@ export async function renderInvestigation(main, id) {
       ),
       el("div", { class: "small muted" }, statusLine),
     );
+  }
+
+  // why gathering stopped, first and plain (change 0002, part 2)
+  function notices() {
+    const i = inv();
+    const current = (i.notices || []).filter((n) => !n.superseded);
+    if (!current.length) return null;
+    return el("div", { class: "notice", role: "alert" }, current.map((n) => el("div", { class: "stack-sm" },
+      el("strong", {}, "Gathering stopped"),
+      el("div", {}, n.text),
+      el("ul", { class: "small" }, n.call_ids.map((cid) => {
+        const c = bundle.calls.find((x) => x.id === cid);
+        const open = (e) => { e.preventDefault(); tab = "activity"; selected = { kind: "call", id: cid }; draw(); };
+        return el("li", {}, el("a", { href: "#", onclick: open }, c ? `${c.capability_id} with ${JSON.stringify(c.received || c.inputs)}` : cid),
+          c ? el("div", { class: "mono xs muted", style: "white-space:pre-wrap" }, c.reason) : null);
+      })),
+      changeModel(),
+    )));
+  }
+
+  function changeModel() {
+    const i = inv();
+    const usable = endpoints.filter((m) => m.id !== i.model_endpoint_id && m.tests.tool_calling && m.tests.tool_calling.status === "passed");
+    if (!hasRole(envId, "investigator") || !["partial", "failed", "cancelled", "interrupted"].includes(i.status) || !usable.length) return null;
+    const pick = el("select", { "aria-label": "Another model" }, usable.map((m) => el("option", { value: m.id }, `${m.name} · ${m.model}`)));
+    const go = async () => {
+      try { await api("POST", `/api/investigations/${id}/resume`, { model_endpoint_id: pick.value }); await refresh(); listen(); } catch (err) { toast(err.message, "error"); }
+    };
+    return el("div", { class: "row" }, pick, el("button", { class: "btn", onclick: go }, "Resume with this model"));
   }
 
   function answer() {
@@ -248,7 +278,7 @@ export async function renderInvestigation(main, id) {
 
   function draw() {
     const body = { findings, activity, evidence, report, proposals, history }[tab]();
-    root.replaceChildren(header(), answer(), nextAction(), el("div", { class: "grid-main" }, el("div", { class: "stack-sm" }, tabs(), body), inspector()));
+    root.replaceChildren(...[header(), notices(), answer(), nextAction()].filter(Boolean), el("div", { class: "grid-main" }, el("div", { class: "stack-sm" }, tabs(), body), inspector()));
   }
 
   async function refresh() { bundle = await api("GET", `/api/investigations/${id}`); draw(); }
@@ -265,7 +295,7 @@ export async function renderInvestigation(main, id) {
       }), 150);
     };
     // the server names every event; EventSource.onmessage would only hear unnamed ones
-    for (const kind of ["status", "step", "call", "model_call", "concluded", "failed"]) stream.addEventListener(kind, onEvent);
+    for (const kind of ["status", "step", "call", "model_call", "concluded", "failed", "stopped_invalid"]) stream.addEventListener(kind, onEvent);
     stream.onerror = () => { if (stream) { stream.close(); stream = null; setTimeout(() => { if (location.hash.endsWith(id)) refresh().then(listen); }, 2000); } };
   }
 

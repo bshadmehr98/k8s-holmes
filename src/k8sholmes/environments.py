@@ -83,7 +83,12 @@ def connect(store: Store, environment: Environment, cluster: Cluster) -> Environ
             matrix[f"{verb} {kind}"] = False
     server_version = str(dig(version, "serverVersion", "gitVersion") or "") or None
     updated = environment.model_copy(
-        update={"permissions": matrix, "connected_at": now(), "server_version": server_version}
+        update={
+            "permissions": matrix,
+            "connected_at": now(),
+            "server_version": server_version,
+            "kinds": sorted(kinds),
+        }
     )
     store.put(updated)
     return updated
