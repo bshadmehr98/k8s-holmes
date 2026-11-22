@@ -32,8 +32,9 @@ export async function renderInvestigation(main, id) {
   // why gathering stopped, first and plain (change 0002, part 2)
   function notices() {
     const i = inv();
-    if (!i.notices || !i.notices.length) return null;
-    return el("div", { class: "notice", role: "alert" }, i.notices.map((n) => el("div", { class: "stack-sm" },
+    const current = (i.notices || []).filter((n) => !n.superseded);
+    if (!current.length) return null;
+    return el("div", { class: "notice", role: "alert" }, current.map((n) => el("div", { class: "stack-sm" },
       el("strong", {}, "Gathering stopped"),
       el("div", {}, n.text),
       el("ul", { class: "small" }, n.call_ids.map((cid) => {

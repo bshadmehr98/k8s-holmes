@@ -207,6 +207,7 @@ class Notice(Record):
     kind: Literal["stopped_invalid"]
     text: str
     call_ids: list[str] = []
+    superseded: bool = False  # a later run (a resume or a follow-up) gathered again; kept as history
 
 
 class Investigation(Record):

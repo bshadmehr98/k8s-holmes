@@ -174,7 +174,8 @@ class Engine:
             environment_id=inv.environment_id,
             subject=f"investigation:{inv.id}",
         )
-        inv = self._update(inv, status="running")
+        stale = [n.model_copy(update={"superseded": True}) for n in inv.notices]
+        inv = self._update(inv, status="running", notices=stale)
         return self._run_phases(inv, user, ("gathering", "concluding"), follow_up=True)
 
     def mark_interrupted(self) -> list[Investigation]:
@@ -193,7 +194,8 @@ class Engine:
         inv = self.store.get(Investigation, investigation_id)
         if inv.status not in ("queued", *RESUMABLE):
             raise InvestigationStateError(f"investigation {inv.id} is {inv.status}")
-        inv = self._update(inv, status="running")
+        stale = [n.model_copy(update={"superseded": True}) for n in inv.notices]  # a new run, a new count
+        inv = self._update(inv, status="running", notices=stale)
         phases: list[Phase] = []
         if inv.framing is None:
             phases.append("framing")
@@ -353,9 +355,9 @@ class Engine:
 
     def _stop_invalid(self, inv: Investigation, last: list[Call]) -> Investigation:
         """The model sent invalid inputs again and again: stop gathering and say so plainly (0002, part 2)."""
-        capability = last[-1].capability_id
+        capability = ", ".join(sorted({c.capability_id for c in last}))
         text = (
-            f"The model stopped gathering: it sent invalid inputs for {capability} {STUCK_AFTER} times in a "
+            f"The model stopped gathering: it sent invalid inputs ({capability}) {STUCK_AFTER} times in a "
             "row. The answer below uses only the evidence gathered before that. A stronger model, or the "
             "structured tool mode, may do better; resume to try again."
         )
@@ -510,7 +512,7 @@ class Engine:
             user=user,
             investigation_id=inv.id,
             period=framing.period,
-            known=known_for(self.store, environment),
+            known=known_for(self.store, environment, cluster),
         )
 
     def _call_model(

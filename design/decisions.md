@@ -229,9 +229,11 @@ revised by the owner at any time:
   applied only when the input model has the canonical field and it was not sent as well; a per-model
   `validation_alias` would repeat the same names on every model. (b) A kind in the kind table is stored as
   its kind name (`Pod`), which kubectl, the fakes and every capability already accept; a served resource
-  outside the table (a CRD) is kept as sent. (c) The known namespaces are those of the latest inventory
-  taken over every namespace; a scoped inventory says nothing about the others, and with none the check
-  is off. (d) An input model names its checked fields in `known_fields`; `k8s.top`'s `kind` (pods or
+  outside the table (a CRD) is kept as sent. (c) The known namespaces are listed from the cluster once per
+  run when the environment may list namespaces; otherwise they are those of the latest inventory taken
+  over every namespace, unless a kind in it was cut or unreadable (a partial picture would refuse
+  namespaces that exist); with neither, the check is off. A kind with an API group (`pods.metrics.k8s.io`)
+  is never rewritten, and a kind outside the table is accepted by its plural, singular or Kind name. (d) An input model names its checked fields in `known_fields`; `k8s.top`'s `kind` (pods or
   nodes) and the knowledge capabilities' fields (which may name what no longer exists) are not checked.
   (e) Validation runs before the namespace allow-list, so an unknown namespace is `invalid` and a known one
   outside the list is `refused` by the gate.

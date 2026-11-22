@@ -58,7 +58,8 @@ The same words are used in code, the API, the interface and the docs.
 | **Environment** | one Kubernetes cluster reached through a kubeconfig context, with its own permissions, inventory, knowledge, exceptions and capability settings |
 | **Investigation** | one question in one environment with a scope and a time period, run as **steps**, ending in findings, limitations and next steps; it has a **status** (§6.5) and a **thread** of user messages and model turns |
 | **Capability** | something the investigation can do: an id, a purpose, a **class** (`inspect`, `probe` or `change`), the systems it reaches, a validated input schema, the permissions it needs, an output with coverage; built in or added by an extension (§5) |
-| **Call** | one execution of a capability: parameters, result, duration, error, the step and user it ran for; every call produces one piece of **evidence** |
+| **Call** | one execution of a capability: parameters (canonical; what the model sent is kept when it differs), result, duration, error, the step and user it ran for; every call that runs produces one piece of **evidence** |
+| **Notice** | what the user must see first about an investigation, such as why gathering stopped; a later run marks it superseded (change 0002) |
 | **Evidence** | something recorded from a source: what was asked (the call's parameters), what came back (the data, truncated if large), when, from which environment, with a hash and a retention class; it has a **coverage** statement (§7) |
 | **Coverage** | what the evidence can say: `observed` (data shows it), `observed_absent` (data of this kind was available for this scope and period and shows none), `no_data` (the source has no data for this scope or period), `cannot_answer` (no connected source can answer this) |
 | **Relationship** | one resource depends on or points at another, with a **basis**: `defined` (in configuration: a selector, a reference), `observed` (in operational data: endpoints, events), `inferred` (a name in an argument or an environment variable, incomplete evidence) |
@@ -190,7 +191,9 @@ plain text (change 0002). The names models expect are accepted for a few fields 
 `labels` for `selector`, `ns` for `namespace`, `resource_name` for `name`) and kinds by any of kubectl's
 names (`po`, `pods`, `Pod`); the call keeps the canonical inputs and, when they differ, what the model
 sent. A `kind` or `namespace` field is checked against the environment: the kinds the cluster serves (from
-connecting) and the namespaces of the latest inventory of every namespace; the schema the model sees lists
+connecting) and its namespaces, listed once per run when the environment may list them, else taken from
+the latest inventory of every namespace when nothing in it was cut or unreadable, else not checked; a kind
+with an API group is kept as sent; the schema the model sees lists
 them as allowed values, within the capability's namespace allow-list, up to 200 namespaces. The allowed
 values help the model; the gate stays the registry's. a capability never prompts, never reads credentials, never shells out
 except through the `Cluster` port; `run` is deterministic for the same cluster state; `data` is JSON that
@@ -563,7 +566,7 @@ headers in logs. Redactions are counted on the evidence. Secret bodies are never
 ### 14.4 Audit and retention
 
 The audit log records: sign-ins, environment and model changes, capability enabling and tests, every
-refused call, exception creation, edit and revocation, finding state changes, proposal and verification
+refused call, a change of an investigation's model, exception creation, edit and revocation, finding state changes, proposal and verification
 actions, shares created and revoked, exports, retention purges. Retention settings per environment: days
 to keep `short` evidence, days to keep investigations that no reviewed finding, exception, report or saved
 run references; a nightly purge that writes what it removed to the audit log. Pinned evidence (§7.1) is
@@ -641,6 +644,10 @@ one connection per thread, schema versioned (`schema_version` table; migrations 
 applied in order at start; a newer schema than the code knows is refused with a message). Records are
 rows with typed columns for what is queried and a JSON column for the rest, validated through
 `records.py` on the way in and out. Blobs (evidence data) are capped text in the same file.
+
+Change 0002 added optional JSON keys only, so the schema version stays: `Environment.kinds` (the resource
+names the cluster serves), `Investigation.notices` (a `Notice`: kind, text, the calls, superseded),
+`Call.received` (what the model sent when it differs from the canonical inputs).
 
 ### 16.2 Interruptions and retries
 

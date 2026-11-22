@@ -64,10 +64,11 @@ def _counts(
 
 def _notices(inv: Investigation) -> list[Section]:
     """What the user must see first (0002, part 2): one section, only when there is something to say."""
-    if not inv.notices:
+    current = [n for n in inv.notices if not n.superseded]
+    if not current:
         return []
-    rows = [f"{n.text} Calls: {', '.join(n.call_ids)}." for n in inv.notices]
-    return [section("Notice", "list", rows, {"notices": len(inv.notices)})]
+    rows = [f"{n.text} Calls: {', '.join(n.call_ids)}." for n in current]
+    return [section("Notice", "list", rows, {"notices": len(current)})]
 
 
 def _model_call_rows(model_calls: list[ModelCall]) -> list[dict[str, Any]]:

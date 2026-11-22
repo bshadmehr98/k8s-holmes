@@ -1,7 +1,6 @@
 """Guarantees 26 to 29 (change 0002, piece A): errors that teach, a stuck model that stops, known values,
 and the names models expect."""
 
-from k8sholmes.environments import take_inventory
 from k8sholmes.records import AuditEntry, Call, Message
 from k8sholmes.testing.model import calls, structured, text
 from tests.e2e.conftest import Demo
@@ -35,10 +34,6 @@ def scripted(demo: Demo, rounds: list[list[tuple[str, dict]]]):
     return model
 
 
-def whole_inventory(demo: Demo) -> None:
-    take_inventory(demo.app.store, demo.env, demo.app.cluster_for(demo.env))
-
-
 def calls_of(demo: Demo, inv_id: str) -> list[Call]:
     """The calls the model asked for (discovery's inventory is the engine's own)."""
     found = demo.app.store.find(Call, {"investigation_id": inv_id}, order_by="at")
@@ -46,13 +41,14 @@ def calls_of(demo: Demo, inv_id: str) -> list[Call]:
 
 
 def test_ac26_an_invalid_call_is_told_how_to_fix_it_in_plain_text(demo: Demo) -> None:
-    whole_inventory(demo)
     model = scripted(demo, [[("k8s.list", {"kind": "pods", "namespace": "shp", "label_sel": "app=api"})]])
     inv = demo.ask("what runs in shop?")
     [call] = calls_of(demo, inv.id)
     assert call.status == "invalid"
     assert "label_sel: Extra inputs are not permitted" in call.reason  # the field is named (guarantee 2)
     assert 'did you mean "selector"' in call.reason.replace("'", '"')
+    # every problem in one message: the field and the namespace (listed from the cluster this run)
+    assert "'shp' is not a namespace in this environment; did you mean 'shop'?" in call.reason
     assert "accepted fields: kind (required), namespace, selector, field_selector" in call.reason
     tool = [m for m in demo.app.store.find(Message, {"investigation_id": inv.id}) if m.role == "tool"]
     assert tool[0].content.startswith("Not run (invalid). k8s.list: invalid inputs")  # text, not JSON
@@ -70,16 +66,24 @@ def test_ac27_three_invalid_calls_in_a_row_stop_gathering_with_a_notice(demo: De
     assert [c.status for c in calls_of(demo, inv.id)] == ["invalid"] * 3  # the fourth round never ran
     [notice] = inv.notices
     assert notice.kind == "stopped_invalid"
-    assert "k8s.list 3 times in a row" in notice.text
+    assert "invalid inputs (k8s.list) 3 times in a row" in notice.text
     assert notice.call_ids == [c.id for c in calls_of(demo, inv.id)]
     assert "the model could not form valid inputs for k8s.list" in inv.limitations
     assert any(kind == "stopped_invalid" for kind, _ in events)
     assert any(r["schema"] and r["schema"].get("title") == "conclusion" for r in model.requests)
-    from k8sholmes.reports.investigation import investigation_report, report_text
+    # a resume starts a fresh count: one more invalid call, then a valid one, and gathering goes on
+    resumed = demo.app.engine.resume(inv.id, demo.user)
+    statuses = [c.status for c in calls_of(demo, inv.id)]
+    assert statuses == ["invalid"] * 3 + ["completed"]
+    assert [n.superseded for n in resumed.notices] == [True]  # kept as history, no longer shown as current
 
-    assert report_text(demo.app.store, inv).split("## ")[1].startswith("Notice")
-    report = investigation_report(demo.app.store, inv, by="test")
-    assert report.sections[0]["heading"] == "Notice"
+
+def test_ac27_three_invalid_calls_in_one_reply_stop_and_name_each_capability(demo: Demo) -> None:
+    scripted(demo, [[("k8s.list", {"kind": "pods", "x": 1}), ("k8s.get", {"y": 1}), ("k8s.list", {"z": 1})]])
+    inv = demo.ask("what runs?")
+    [notice] = inv.notices
+    assert "invalid inputs (k8s.get, k8s.list) 3 times" in notice.text
+    assert "the model could not form valid inputs for k8s.get, k8s.list" in inv.limitations
 
 
 def test_ac27_a_valid_call_resets_the_count(demo: Demo) -> None:
@@ -90,8 +94,22 @@ def test_ac27_a_valid_call_resets_the_count(demo: Demo) -> None:
     assert [c.status for c in calls_of(demo, inv.id)].count("invalid") == 4
 
 
+def test_ac28_validation_comes_before_the_allow_list_and_the_gate_still_refuses(demo: Demo) -> None:
+    from k8sholmes.records import CapabilitySettings
+
+    settings = demo.env.settings.model_copy(deep=True)
+    settings.capabilities["k8s.events"] = CapabilitySettings(namespaces=["elsewhere"])
+    demo.app.store.put(demo.env.model_copy(update={"settings": settings}))
+    scripted(demo, [[("k8s.events", {"namespace": "shop"}), ("k8s.events", {"namespace": "nowhere"})]])
+    inv = demo.ask("what happened?")
+    known_outside, unknown = calls_of(demo, inv.id)
+    assert known_outside.status == "refused"  # exists, outside the allow-list: the gate
+    assert "limited to elsewhere" in known_outside.reason
+    assert unknown.status == "invalid"  # does not exist: validation, before the gate
+    assert "'nowhere' is not a namespace in this environment" in unknown.reason
+
+
 def test_ac28_the_model_sees_known_values_and_validation_checks_them(demo: Demo) -> None:
-    whole_inventory(demo)
     settings = demo.env.settings.model_copy(deep=True)
     from k8sholmes.records import CapabilitySettings
 
@@ -116,13 +134,12 @@ def test_ac28_the_model_sees_known_values_and_validation_checks_them(demo: Demo)
 
 
 def test_ac28_an_unknown_namespace_is_refused_with_a_suggestion(demo: Demo) -> None:
-    whole_inventory(demo)
     scripted(demo, [[("k8s.list", {"kind": "pods", "namespace": "shpo"})]])
     inv = demo.ask("what runs?")
     [call] = calls_of(demo, inv.id)
     assert call.status == "invalid"
     assert "'shpo' is not a namespace in this environment; did you mean 'shop'?" in call.reason
-    assert "take an inventory" in call.reason
+    assert "(namespaces listed at the start of this run)" in call.reason
 
 
 def test_ac29_aliases_and_kind_names_are_accepted_and_what_was_sent_is_kept(demo: Demo) -> None:
@@ -145,9 +162,11 @@ def test_ac29_aliases_and_kind_names_are_accepted_and_what_was_sent_is_kept(demo
 def test_resume_with_another_model_is_recorded_in_the_thread_and_the_audit_log(demo: Demo) -> None:
     scripted(demo, [])
     inv = demo.ask("what runs?")
+    before = inv.model_endpoint_id
     changed = demo.app.engine.change_model(inv.id, demo.user, "mdl_other")
     assert changed.model_endpoint_id == "mdl_other"
     notes = [m for m in demo.app.store.find(Message, {"investigation_id": inv.id}) if m.role == "user"]
     assert "changed the model endpoint" in notes[-1].content
-    assert any(a.action == "investigation_model_changed" for a in demo.app.store.find(AuditEntry))
+    [entry] = [a for a in demo.app.store.find(AuditEntry) if a.action == "investigation_model_changed"]
+    assert entry.details == {"from": before, "to": "mdl_other"}
     assert demo.app.engine.change_model(inv.id, demo.user, "mdl_other") == changed  # no change: nothing

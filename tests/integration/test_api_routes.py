@@ -245,6 +245,10 @@ def test_investigation_control_routes_and_request_parsing(tmp_path: Path) -> Non
             "POST", f"/api/investigations/{inv['id']}/resume", {"model_endpoint_id": untested.id}
         )
         assert status == 400 and "has not been tested" in payload["error"]
+        status, _ = client.call(
+            "POST", f"/api/investigations/{inv['id']}/resume", {"model_endpoint_id": "mdl_missing"}
+        )
+        assert status == 404
         assert app.store.get(Investigation, inv["id"]).model_endpoint_id != untested.id
         changed = client.ok(
             "POST", f"/api/investigations/{inv['id']}/resume", {"model_endpoint_id": usable.id}

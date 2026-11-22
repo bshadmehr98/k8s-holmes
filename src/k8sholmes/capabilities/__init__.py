@@ -137,19 +137,25 @@ class Registry:
     # validation and the gate
 
     @staticmethod
-    def validate(cap: Capability, raw: dict[str, Any], known: Known | None = None) -> BaseModel:
-        """Validated inputs, or `InvalidInput` naming the field, listing the accepted fields and
+    def validate(
+        cap: Capability, raw: dict[str, Any], known: Known | None = None, allow: list[str] | None = None
+    ) -> BaseModel:
+        """Validated inputs, or `InvalidInput` naming every wrong field, listing the accepted fields and
         suggesting the closest field or value (guarantee 2; 0002, part 2)."""
+        problems: list[tuple[str, str, bool]] = [
+            (name, message, False)
+            for name, message in unknown_values(cap.inputs, raw, known or Known(), allow or [])
+        ]
         try:
             inputs = cap.inputs.model_validate(raw)
         except ValidationError as exc:
             problems = [
-                ((".".join(str(p) for p in e["loc"]) or "input"), str(e["msg"])) for e in exc.errors()
-            ]
+                (".".join(str(p) for p in e["loc"]) or "input", str(e["msg"]), e["type"] == "extra_forbidden")
+                for e in exc.errors()
+            ] + problems
             raise InvalidInput(explain(cap.id, cap.inputs, problems)) from None
-        unknown = unknown_values(cap.inputs, inputs, known) if known else []
-        if unknown:
-            raise InvalidInput(explain(cap.id, cap.inputs, unknown))
+        if problems:
+            raise InvalidInput(explain(cap.id, cap.inputs, problems))
         return inputs
 
     @staticmethod
@@ -248,9 +254,6 @@ class Registry:
         """Validate, gate, run and record. A capability's own failure never raises: it is recorded."""
 
         sent = raw_inputs
-        cap_or_none = self._by_id.get(capability_id)
-        if cap_or_none is not None:
-            raw_inputs = canonical(cap_or_none.inputs, raw_inputs)
 
         def call(status: str, reason: str = "", duration_ms: int = 0) -> Call:
             return Call(
@@ -269,14 +272,15 @@ class Registry:
             cap = self.get(capability_id)
         except NotFound as exc:
             return call("invalid", str(exc)), None
+        raw_inputs = canonical(cap.inputs, raw_inputs)  # `call` records the canonical inputs from here
         refusal = self.refusal(cap, ctx.user, ctx.environment, auth)
         if refusal is not None:
             return self._refused(call, cap, refusal, ctx, auth), None
+        settings = self.settings_for(cap, ctx.environment)
         try:
-            inputs = self.validate(cap, raw_inputs, ctx.known)
+            inputs = self.validate(cap, raw_inputs, ctx.known, settings.namespaces)
         except InvalidInput as exc:
             return call("invalid", str(exc)), None
-        settings = self.settings_for(cap, ctx.environment)
         refusal = self.namespace_refusal(cap, inputs, settings)
         if refusal is not None:
             return self._refused(call, cap, refusal, ctx, auth), None

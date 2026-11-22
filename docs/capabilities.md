@@ -22,8 +22,10 @@ fix them, in plain words: the field, the accepted fields, and the closest field 
 'lmx-prod' is not a namespace in this environment; did you mean 'lms-prod'?"). A few names models often use
 are accepted: `label_selector` or `labels` for `selector`, `ns` for `namespace`, `resource_name` for
 `name`, and any of kubectl's names for a kind (`po`, `pods`, `Pod`); the call keeps what the model sent.
-The kinds the cluster serves and the namespaces of the latest inventory are listed to the model as the
-values a `kind` or `namespace` accepts; take an inventory after creating a namespace. Three invalid calls
+The kinds the cluster serves and its namespaces (listed when an investigation gathers, or taken from the
+latest complete inventory when the cluster refuses to list namespaces) are offered to the model as the
+values a `kind` or `namespace` accepts, and a name outside them is refused with the closest suggestion; a
+CRD the cluster serves is accepted by any name kubectl takes. Three invalid calls
 in a row stop gathering with a notice that says why, and the investigation concludes with what it has.
 
 ## Coverage

@@ -117,14 +117,15 @@ The input schema a model sees is computed per investigation from the environment
 
 - `kind` fields: an enum of the kinds the cluster serves (from `api-resources` at connect) that the
   capability may read;
-- `namespace` fields: an enum of the namespaces in the latest inventory snapshot, intersected with the
+- `namespace` fields: an enum of the namespaces the cluster lists (or, when it may not, those of a
+  complete inventory of every namespace; D-024), intersected with the
   capability's namespace allow-list (§5.4); above 200 namespaces the field stays a string and part 2's
   suggestions do the work;
 - the framing schema's `intended_capabilities`: an enum of the available capability ids.
 
 Validation checks the same values, so the enum is a convenience for the model, not the gate: a namespace
 outside the allow-list is still refused by code. A namespace created after the snapshot is reported as
-"not in the inventory of <time>; take inventory" (discovery already refreshes a stale snapshot, §6.1).
+refused with the closest suggestion; the namespaces are listed once per run (D-024).
 
 ### 4. Fewer choices per decision
 
