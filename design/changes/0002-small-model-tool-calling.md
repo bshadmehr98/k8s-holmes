@@ -2,8 +2,8 @@
 
 ## Status
 
-`proposed` (2026-11-22). Builds on design 0001 as of milestone 4 (`feat/m4-real-clusters-and-docs`,
-PR #1); section numbers and acceptance cases refer to that version of [design/current.md](../current.md).
+`accepted (approved by the maintainer 2026-11-22)`. Builds on design 0001 as of milestone 4 (merged
+2026-11-22, PR #1); section numbers and acceptance cases refer to that version of [design/current.md](../current.md).
 
 ## Context
 
@@ -304,7 +304,5 @@ Answered by the maintainer on 2026-11-22:
 4. **The stuck-model limit:** three consecutive invalid calls, and the user must see clearly why gathering
    stopped and what to do next (the notice in part 2).
 
-Still open:
-
-3. **The first playbooks:** `unused`, `restarts`, `exposure`, `what_changed`; add or drop any?
-5. **Order:** build piece A first, right after milestone 4 is merged?
+3. **The first playbooks:** the four proposed (`unused`, `restarts`, `exposure`, `what_changed`).
+5. **Order:** pieces A, B, C in turn, after milestone 4 (merged 2026-11-22).
