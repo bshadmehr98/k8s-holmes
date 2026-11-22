@@ -22,7 +22,7 @@ export async function renderInvestigation(main, id) {
     const statusLine = i.status === "running" && current ? `${current.phase}: ${current.summary || "working…"}` : `${i.status}${i.limitations.length ? ` · ${i.limitations.length} limitation${i.limitations.length > 1 ? "s" : ""}` : ""}`;
     return el("div", { class: "stack-sm" },
       el("div", { class: "row between" },
-        el("div", {}, el("h1", {}, i.question), el("div", { class: "muted small" }, `Scope: ${scope} · ${i.framing && i.framing.period.rule ? i.framing.period.rule : ""} · ${i.model_name || "no model yet"}${i.tool_mode ? ` (${i.tool_mode} tool mode)` : ""} · started ${when(i.created_at)}`)),
+        el("div", {}, el("h1", {}, i.question), el("div", { class: "muted small" }, `Scope: ${scope} · ${i.framing && i.framing.period.rule ? i.framing.period.rule : ""} · ${i.model_name || "no model yet"}${i.tool_mode ? ` (${i.tool_mode} tool mode)` : ""}${i.playbook ? ` · playbook ${i.playbook}` : ""} · started ${when(i.created_at)}`)),
         el("div", { class: "row" }, el("span", { class: `dot ${i.status}` }), statusBadge(i.status)),
       ),
       el("div", { class: "small muted" }, statusLine),

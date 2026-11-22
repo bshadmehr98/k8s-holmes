@@ -59,6 +59,7 @@ The same words are used in code, the API, the interface and the docs.
 | **Investigation** | one question in one environment with a scope and a time period, run as **steps**, ending in findings, limitations and next steps; it has a **status** (§6.5) and a **thread** of user messages and model turns |
 | **Capability** | something the investigation can do: an id, a purpose, a **class** (`inspect`, `probe` or `change`), the systems it reaches, a validated input schema, the permissions it needs, an output with coverage; built in or added by an extension (§5) |
 | **Call** | one execution of a capability: parameters (canonical; what the model sent is kept when it differs), result, duration, error, the step and user it ran for; every call that runs produces one piece of **evidence** |
+| **Playbook** | a fixed set of capability calls for a common question shape (`unused`, `restarts`, `exposure`, `what_changed`), named by the model in its framing and run by code through the gate before the model gathers (change 0002) |
 | **Notice** | what the user must see first about an investigation, such as why gathering stopped; a later run marks it superseded (change 0002) |
 | **Evidence** | something recorded from a source: what was asked (the call's parameters), what came back (the data, truncated if large), when, from which environment, with a hash and a retention class; it has a **coverage** statement (§7) |
 | **Coverage** | what the evidence can say: `observed` (data shows it), `observed_absent` (data of this kind was available for this scope and period and shows none), `no_data` (the source has no data for this scope or period), `cannot_answer` (no connected source can answer this) |
@@ -99,6 +100,7 @@ src/k8sholmes/
     builtin.py          the registry with every built-in capability and the loaded extensions
   engine.py             the investigation engine (§6): framing, discovery, gathering, concluding, follow-up
   actions.py            the structured tool mode: the choose and fill steps, their schemas and repairs (0002)
+  playbooks.py          playbooks: fixed capability calls for common question shapes, run by the engine (0002)
   thread.py             what the model sees: the system prompt, the schemas, the context, the thread (§6.2)
   prompts/              the system prompt and the output schemas the engine sends (plain text files)
   evidence.py           evidence records, coverage, redaction, size caps (§7)
@@ -266,7 +268,7 @@ The brief's seven steps map to five phases, each persisted as it completes:
 |---|---|---|
 | **framing** | model, structured | from the question, the environment and the user's scope: the question restated, the scope (namespaces, resources), the time period, the initial hypotheses, the capabilities it intends to use |
 | **discovery** | code | the permission matrix, the available capabilities with their coverage promises, the knowledge and exceptions whose scope touches the framing, the latest inventory snapshot (made if stale) |
-| **gathering** | model and code | the tool-calling loop (§6.2) |
+| **gathering** | model and code | the playbook the framing named, if any, run once by code through the gate as one step (cancel and budgets checked before each call; never repeated on resume); then the tool-calling loop (§6.2) |
 | **concluding** | model, structured, then code | findings, limitations, next steps, the knowledge used; then validation (§6.3), exception matching (§9.1) and de-duplication (§8.3) |
 | **follow-up** | user, then model | a message, more context or a requested check starts another gathering and concluding round; the earlier findings are revised, never silently replaced (§8.4) |
 
@@ -785,6 +787,9 @@ Added by [change 0002](changes/0002-small-model-tool-calling.md):
     available ids.
 29. **Aliases are recorded.** `label_selector` and `kind: "po"` are accepted and stored as `selector` and
     `Pod` with what was sent in `received`; an undeclared extra field is still refused (guarantee 2).
+30. **Playbooks run through the gate.** "Is anything unused?" framed with the `unused` playbook runs its
+    calls recorded with the playbook's id; a disabled capability in it is refused and becomes a
+    limitation; the conclusion still states `cannot_answer` for traffic (guarantee 4).
 31. **The context is bounded.** With `context_tokens` set, every gathering request fits the limit, older
     results appear as summary and evidence id, and the stored thread and evidence are unchanged; a set
     temperature is sent on every call.
@@ -852,7 +857,12 @@ capabilities first in both modes; an endpoint's temperature and context limit, w
 compacted in what the model sees; the tool mode, temperature and context on the models page and in the
 API (§6.2, §13.1). Guarantees 25 and 31 are tested.
 
-**Planned:** change 0002 piece C (playbooks; guarantee 30); anything else is a new change record.
+**Implemented (change 0002, piece C, 2026-11-22):** playbooks: `unused`, `restarts`, `exposure` and
+`what_changed`, chosen in the framing, run once through the gate before the model gathers, their calls
+recorded with the playbook's id and capped at 40, their limitation stated by code (§2, §6.1). Guarantee
+30 is tested. Change 0002 is implemented whole.
+
+**Planned:** nothing before 0.1.0 is released; what comes after is a new change record.
 
 ## 20. Known limits (0.1)
 

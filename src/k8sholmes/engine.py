@@ -17,9 +17,10 @@ from k8sholmes.auth import Auth
 from k8sholmes.capabilities import Capability, Context, Registry
 from k8sholmes.capabilities.inputs import known_for
 from k8sholmes.cluster import Cluster
-from k8sholmes.environments import connect
+from k8sholmes.environments import connect, latest_inventory
 from k8sholmes.errors import InvestigationStateError, ModelFailure
 from k8sholmes.models import Model, Reply, tool_definition
+from k8sholmes.playbooks import PLAYBOOKS, plan_for
 from k8sholmes.records import (
     AcceptedException,
     Budgets,
@@ -37,6 +38,7 @@ from k8sholmes.records import (
     Step,
     ToolCall,
     User,
+    new_id,
     now,
 )
 from k8sholmes.store import Store
@@ -44,6 +46,10 @@ from k8sholmes.store import Store
 RETRY_BACKOFF_S = (1.0, 3.0)
 RESUMABLE = ("cancelled", "interrupted", "partial", "failed")
 EventHook = Callable[[str, dict[str, Any]], None]
+
+
+def _structured(model: Model) -> bool:
+    return getattr(model, "tool_mode", "native") == "structured"
 
 
 class Engine:
@@ -302,6 +308,48 @@ class Engine:
         )
         return inv
 
+    def _playbook(
+        self,
+        inv: Investigation,
+        model: Model,
+        ctx: Context,
+        available: list[Capability],
+        started: float,
+    ) -> Investigation:
+        """The playbook the framing named, run once through the gate before the model gathers (0002).
+        It is marked as run before its first call, so a resume never repeats it; cancel and the budgets
+        are checked before every call."""
+        framing = inv.framing
+        if framing is None or framing.playbook not in PLAYBOOKS or inv.playbook:
+            return inv
+        book = PLAYBOOKS[framing.playbook]
+        plan, limitations = plan_for(book, framing, latest_inventory(self.store, ctx.environment.id))
+        if book.needs and not any(book.needs in c.systems for c in available):
+            limitations.append(book.limitation)
+        inv = self._update(inv, playbook=book.id, limitations=[*inv.limitations, *limitations])
+        structured = _structured(model)
+        tool_calls = [ToolCall(id=new_id("pb"), name=cid, arguments=args) for cid, args in plan]
+        step = self._begin_step(inv, "gathering")
+        round_ = self._round(inv)
+        note = f"Playbook {book.id} ({book.title}): {len(plan)} checks, run by K8sHolmes, not the model."
+        listed = [] if structured else tool_calls
+        self._append(inv, "assistant", note, author=f"playbook:{book.id}", tool_calls=listed, round_=round_)
+        summaries: list[str] = []
+        for done, tool_call in enumerate(tool_calls):
+            inv = self.store.get(Investigation, inv.id)
+            stop = "cancelled" if inv.status == "cancelled" else self._budget_hit(inv, started)
+            if stop:
+                if stop != "cancelled":
+                    inv = self._update(inv, limitations=[*inv.limitations, stop])
+                summaries.append(f"stopped after {done} of {len(plan)} calls: {stop}")
+                break
+            ran, _ = self._run_tool_calls(
+                inv, step, [tool_call], ctx, round_, structured=structured, playbook=book.id
+            )
+            summaries += ran
+        self._end_step(inv, step, f"playbook {book.id}: " + "; ".join(summaries))
+        return self.store.get(Investigation, inv.id)
+
     def _gathering(
         self,
         inv: Investigation,
@@ -312,10 +360,11 @@ class Engine:
         started: float,
     ) -> Investigation:
         available, unavailable = self._capabilities(environment, user)
+        ctx = self._context(inv, environment, cluster, user)
+        inv = self._playbook(inv, model, ctx, available, started)  # once, when the framing named one
         framing = inv.framing or Framing(question=inv.question)
         available = actions.ordered(available, framing.intended_capabilities)  # 0002, part 4
-        ctx = self._context(inv, environment, cluster, user)
-        structured = getattr(model, "tool_mode", "native") == "structured"
+        structured = _structured(model)
         turn = self._structured_turn if structured else self._native_turn
         streak: list[Call] = []  # the latest consecutive invalid calls
         while True:
@@ -406,15 +455,19 @@ class Engine:
         round_: int,
         *,
         structured: bool = False,
+        playbook: str | None = None,
     ) -> tuple[list[str], list[Call]]:
         """Run each requested capability through the gate; record the call, the evidence, the result
         message (a tool message, or in the structured mode a context message marked as data)."""
         summaries: list[str] = []
         calls: list[Call] = []
-        for tool_call in tool_calls[: inv.budgets.calls_per_step]:
+        limit = inv.budgets.calls_per_step
+        for tool_call in tool_calls[:limit]:
             call, evidence = self.registry.execute(
                 tool_call.name, tool_call.arguments, ctx, self.auth, step_id=step.id
             )
+            if playbook:
+                call = call.model_copy(update={"playbook": playbook})
             with self.store.transaction():
                 self.store.put(call)
                 if evidence is not None:
@@ -436,9 +489,11 @@ class Engine:
             summaries.append(f"{tool_call.name}: {call.status}{detail}")
             if call.status == "refused":
                 fresh = self.store.get(Investigation, inv.id)
-                self._update(fresh, limitations=[*fresh.limitations, f"refused: {call.reason}"])
+                refusal = f"refused: {call.reason}"
+                if refusal not in fresh.limitations:  # a fan-out refused alike says it once
+                    self._update(fresh, limitations=[*fresh.limitations, refusal])
             self._emit("call", {"investigation_id": inv.id, "call": call.model_dump(mode="json")})
-        for skipped in tool_calls[inv.budgets.calls_per_step :]:
+        for skipped in tool_calls[limit:]:
             self._append(
                 inv,
                 "tool",

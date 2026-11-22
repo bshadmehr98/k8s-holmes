@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from k8sholmes import knowledge
 from k8sholmes.capabilities import Capability
+from k8sholmes.playbooks import PLAYBOOKS
 from k8sholmes.records import (
     AcceptedException,
     Call,
@@ -53,6 +54,7 @@ def framing_schema(capability_ids: list[str]) -> dict[str, Any]:
     schema = json.loads(json.dumps(FRAMING_SCHEMA))
     if capability_ids:
         schema["properties"]["intended_capabilities"]["items"] = {"type": "string", "enum": capability_ids}
+    schema["properties"]["playbook"]["enum"] = [*PLAYBOOKS, "none"]
     return schema
 
 
@@ -64,9 +66,17 @@ def framing_prompt(inv: Investigation) -> list[dict[str, Any]]:
         f"resources {[r.key() for r in inv.scope.resources] or 'none named'}.\n"
         f"User's period: {period_text}.\n"
         "Frame the investigation: restate the question, name the namespaces and resources in scope, "
-        "the period in hours, the hypotheses to test, and the capabilities you intend to use first."
+        "the period in hours, the hypotheses to test, the capabilities you intend to use first, and the "
+        "playbook whose checks fit the question, or none. Playbooks: "
+        + "; ".join(f"{p.id} ({p.title})" for p in PLAYBOOKS.values())
+        + "."
     )
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+
+
+def _playbook_of(value: Any) -> str | None:
+    """A playbook id the model named, or None: anything else, of any shape, means none."""
+    return value if isinstance(value, str) and value in PLAYBOOKS else None
 
 
 def framing_from(payload: dict[str, Any], inv: Investigation) -> Framing:
@@ -93,6 +103,7 @@ def framing_from(payload: dict[str, Any], inv: Investigation) -> Framing:
         period=period,
         hypotheses=[str(h) for h in cast(list[Any], payload.get("hypotheses") or [])],
         intended_capabilities=[str(c) for c in cast(list[Any], payload.get("intended_capabilities") or [])],
+        playbook=_playbook_of(payload.get("playbook")),
     )
 
 

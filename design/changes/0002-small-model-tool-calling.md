@@ -2,7 +2,7 @@
 
 ## Status
 
-`accepted (approved by the maintainer 2026-11-22)`. Builds on design 0001 as of milestone 4 (merged
+`implemented in 0.1.0` (approved by the maintainer 2026-11-22; pieces A, B and C built the same day). Builds on design 0001 as of milestone 4 (merged
 2026-11-22, PR #1); section numbers and acceptance cases refer to that version of [design/current.md](../current.md).
 
 ## Context
@@ -160,7 +160,7 @@ the gate before the model's own gathering:
 Playbook
   id          "unused"                         stable, like a capability id
   title       "Resources that look unused"
-  shape       which §7.2 question shape it serves, or none
+  needs       a system that could answer what the cluster cannot (traffic); none available: the limitation
   calls       [(capability id, inputs over the framing's scope), …]; may fan out over the inventory
               ("k8s.service_backends for every Service in scope"), capped at 40 calls
   limitation  what it cannot say with the environment's sources ("traffic: no traffic source …")
@@ -170,7 +170,8 @@ The framing schema gets `playbook`: an enum of the playbook ids plus `none`; the
 runs it. Each call is a normal recorded call carrying `playbook: <id>`, refused by the gate like any
 other, and counts against the budgets. After the playbook, the model's gathering loop continues with
 the results in its thread (it may add calls or answer `done`), then concludes; validation (§6.3) is
-unchanged. The playbook's `limitation` is added by code when the environment has no capability that could
+unchanged. A playbook runs as one step: cancel and the time and token budgets are checked before each of
+its calls, and it is marked as run before its first, so a resume never repeats it. The playbook's `limitation` is added by code when the environment has no capability that could
 answer it, so "unused" without a traffic source always carries `cannot_answer` for traffic.
 
 The first playbooks: `unused` (inventory with relationships; service backends for every Service; workloads
@@ -289,7 +290,8 @@ the rest, so it does not grow.
 Existing endpoints get `tool_mode: auto`, which resolves to `structured` if their last structured test
 passed; an admin can pin `native`. Existing investigations, calls and evidence read as before; the new
 keys are absent. Accepting aliases is wider, not narrower: every input valid today stays valid. The
-public Python API gains the `Playbook` model and `tool_mode` on `ModelEndpoint`; nothing is removed.
+records gain `tool_mode` and `temperature` on `ModelEndpoint`; playbooks are built in and not part of the
+public Python API (`k8sholmes.playbooks` is internal); nothing is removed.
 
 Build order, each piece its own branch with its own checks:
 

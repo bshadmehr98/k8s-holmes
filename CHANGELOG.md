@@ -24,6 +24,10 @@ design changed is in [`design/changes/`](design/changes/).
 
 ### Added
 
+- **Playbooks** ([0002](design/changes/0002-small-model-tool-calling.md), piece C). For "is anything
+  unused?", "why does it restart?", "what is exposed?" and "what changed?" the model names a playbook while
+  framing and K8sHolmes runs its checks itself, through the same gate, before the model gathers; the calls
+  carry the playbook's name and what the cluster cannot answer is stated as a limitation.
 - **The structured tool mode** ([0002](design/changes/0002-small-model-tool-calling.md), piece B). An
   endpoint's tool mode can be `structured`: each gathering step is two small JSON answers (which
   capability, then its inputs) under the server's schema, repaired once when they are not JSON, so small

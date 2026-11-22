@@ -45,6 +45,10 @@ def _selector_text(selector: dict[str, str]) -> str:
 # k8s.inventory
 
 
+EVENTS_MAX_HOURS = 24 * 30  # how far back k8s.events and k8s.changes may look
+CHANGES_MAX_HOURS = 24 * 90
+
+
 class InventoryInputs(Inputs):
     known_fields: ClassVar[dict[str, str]] = {"namespaces": "namespaces"}
     namespaces: list[str] = Field(
@@ -151,7 +155,7 @@ class EventsInputs(Inputs):
     namespace: str | None = None
     kind: str | None = Field(default=None, description="With name: only events about this resource.")
     name: str | None = None
-    since_hours: float = Field(default=24, ge=0, le=24 * 30, description="How far back to look.")
+    since_hours: float = Field(default=24, ge=0, le=EVENTS_MAX_HOURS, description="How far back to look.")
 
 
 def _event_row(e: dict[str, Any]) -> dict[str, Any]:
@@ -335,7 +339,7 @@ def run_workload_health(inputs: BaseModel, ctx: Context) -> Result:
 class ChangesInputs(Inputs):
     known_fields: ClassVar[dict[str, str]] = {"namespace": "namespaces"}
     namespace: str
-    since_hours: float = Field(default=24, ge=0, le=24 * 90)
+    since_hours: float = Field(default=24, ge=0, le=CHANGES_MAX_HOURS)
     name: str | None = Field(default=None, description="Only changes about resources with this name.")
 
 
