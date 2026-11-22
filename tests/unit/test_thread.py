@@ -44,3 +44,31 @@ def test_shrink_always_fits_and_ends() -> None:
     out = shrink(data, 300)
     assert len(json.dumps(out)) <= 300 or all(isinstance(v, str) and v.startswith("<") for v in out.values())
     assert shrink("w" * 1_000, 100).endswith("stored as evidence]")
+
+
+def test_fit_compacts_the_oldest_results_wherever_they_sit_and_never_the_newest_four() -> None:
+    """Change 0002, part 7: positions come from the messages, so an inserted reply cannot shift them."""
+    import json as _json
+
+    from k8sholmes.thread import fit, tokens_of
+
+    def result(n: int, role: str = "tool") -> dict:
+        body = _json.dumps(
+            {"evidence_id": f"ev_{n}", "status": "completed", "summary": "s", "data": "x" * 2000}
+        )
+        return {"role": role, "content": body if role == "tool" else f"Result of k8s.list (data):\n{body}"}
+
+    messages = [{"role": "system", "content": "p"}, {"role": "user", "content": "q"}]
+    messages += [result(1), {"role": "tool", "content": '{"error": "not run: interrupted"}'}]
+    messages += [result(n, "user" if n % 2 else "tool") for n in range(2, 8)]
+    assert fit(messages, None) is messages  # no limit: untouched
+    fitted = fit(messages, 1)  # cannot fit: every older result is compacted, the newest four stay whole
+    shortened = [m for m in fitted if "an older result" in str(m["content"])]
+    assert len(shortened) == 3 and all(
+        _json.loads(m["content"].rpartition("\n")[2])["evidence_id"] for m in shortened
+    )
+    assert all("an older result" not in str(m["content"]) for m in fitted[-4:])
+    assert fitted[5]["content"].startswith("Result of k8s.list (data):\n")  # the header stays
+    assert "x" * 2000 in messages[2]["content"]  # a copy: the input is unchanged
+    roomy = fit(messages, tokens_of(messages) - 100)
+    assert sum("an older result" in str(m["content"]) for m in roomy) == 1  # only as much as needed

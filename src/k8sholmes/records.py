@@ -232,6 +232,7 @@ class Investigation(Record):
     usage: Usage = Field(default_factory=Usage)
     answer: str | None = None  # the one-paragraph answer shown first (design §15.2)
     notices: list[Notice] = []  # what the user must see first, such as why gathering stopped (0002)
+    tool_mode: str | None = None  # the tool mode of its model's latest call (0002, part 1)
 
 
 class ToolCall(Record):
@@ -389,6 +390,7 @@ class ModelLimits(Record):
     timeout_ms: int = 120_000
     tokens_per_investigation: int = 400_000
     tokens_per_day: int = 4_000_000
+    context_tokens: int | None = Field(default=None, ge=1000)  # requests are compacted to fit (0002)
 
 
 class ModelPrice(Record):
@@ -415,6 +417,8 @@ class ModelEndpoint(Record):
     limits: ModelLimits = Field(default_factory=ModelLimits)
     price: ModelPrice | None = None
     tests: dict[str, CapabilityTestResult] = {}
+    tool_mode: Literal["auto", "native", "structured"] = "auto"  # how gathering asks for calls (0002)
+    temperature: float | None = Field(default=None, ge=0, le=2)  # sent with every call when set (0002)
     is_default: bool = False
     created_at: datetime = Field(default_factory=now)
 
@@ -431,6 +435,8 @@ class ModelCall(Record):
     duration_ms: int = 0
     status: Literal["ok", "retried", "failed"] = "ok"
     error: str | None = None
+    mode: str | None = None  # the endpoint's tool mode: "native" or "structured" (0002)
+    step: str | None = None  # a structured gathering step: "choose" or "fill"
 
 
 # Reports (design §10)

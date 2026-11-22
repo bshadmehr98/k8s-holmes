@@ -285,3 +285,27 @@ def test_the_client_keeps_the_model_contract(endpoint: records.ModelEndpoint) ->
     from k8sholmes.testing import check_model
 
     check_model(OpenAICompatible(endpoint, "sk-test-key"))
+
+
+def test_temperature_and_the_tool_mode_of_an_endpoint(endpoint: records.ModelEndpoint) -> None:
+    """Change 0002, parts 1 and 7: a set temperature is sent on every call; auto picks the mode."""
+    from k8sholmes.models import effective_tool_mode
+
+    OpenAICompatible(endpoint, "sk-test-key").complete([{"role": "user", "content": "hi"}], max_tokens=5)
+    assert "temperature" not in SEEN[-1]["body"]  # unset: the server's default
+    cool = endpoint.model_copy(update={"temperature": 0.2})
+    OpenAICompatible(cool, "sk-test-key").complete([{"role": "user", "content": "hi"}], max_tokens=5)
+    assert SEEN[-1]["body"]["temperature"] == 0.2
+    cooled = OpenAICompatible(cool, "sk-test-key")
+    cooled.complete([{"role": "user", "content": "count"}], stream=True)
+    cooled.complete([{"role": "user", "content": "6*7?"}], schema={"title": "a", "type": "object"})
+    assert all(seen["body"]["temperature"] == 0.2 for seen in SEEN[-2:])  # streamed and structured too
+    passed = records.CapabilityTestResult(status="passed")
+    assert effective_tool_mode(endpoint) == "native"  # auto, untested
+    tested = endpoint.model_copy(update={"tests": {"structured": passed}})
+    assert effective_tool_mode(tested) == "structured"
+    assert OpenAICompatible(tested, None).tool_mode == "structured"
+    pinned = tested.model_copy(update={"tool_mode": "native"})
+    assert effective_tool_mode(pinned) == "native"
+    limited = endpoint.model_copy(update={"limits": records.ModelLimits(context_tokens=8000)})
+    assert OpenAICompatible(limited, None).context_tokens == 8000

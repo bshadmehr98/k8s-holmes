@@ -24,6 +24,12 @@ design changed is in [`design/changes/`](design/changes/).
 
 ### Added
 
+- **The structured tool mode** ([0002](design/changes/0002-small-model-tool-calling.md), piece B). An
+  endpoint's tool mode can be `structured`: each gathering step is two small JSON answers (which
+  capability, then its inputs) under the server's schema, repaired once when they are not JSON, so small
+  local models no longer send malformed tool calls; `auto` (the default) picks it once the
+  structured-replies test passed. The framing's intended capabilities come first. An endpoint can set a
+  temperature and a context limit; older results are then shown by their summary and evidence id.
 - **Inputs a model can get right** ([0002](design/changes/0002-small-model-tool-calling.md), piece A).
   An invalid capability call is answered in plain text with the field, the accepted fields and the closest
   field or value; `label_selector`, `ns` and kubectl's kind names are accepted, and the call keeps what the

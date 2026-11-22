@@ -30,6 +30,15 @@ environment variable you name. **Run capability tests** before use: connectivity
 model, tool calling, streaming, structured replies, limits. An endpoint whose tool-calling test failed
 cannot be chosen for investigations. Passing tests do not prove the model investigates well.
 
+**Tool mode.** `native` offers the capabilities as tools and the model writes tool calls. `structured` asks
+for two small JSON answers per step, which capability next and then its inputs, under the server's
+schema, so a small local model (Ollama, vLLM, llama.cpp) cannot send malformed calls and chooses from a
+short list. `auto`, the default, is `structured` once the structured-replies test has passed. Set it,
+with an optional **temperature** (0 to 0.3 suits local models) and a **context** limit in tokens, under
+the endpoint in Settings → Models. Ollama cuts a prompt longer than its context length without saying
+so (set by `OLLAMA_CONTEXT_LENGTH`): keep the endpoint's context at or
+below it, and older results are then shown to the model by their summary and evidence id.
+
 ## Users and roles
 
 `viewer` reads; `investigator` runs inspect capabilities, edits findings, writes knowledge, accepts

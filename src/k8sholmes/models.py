@@ -37,6 +37,8 @@ class Model(Protocol):
     """One structured call: messages in, a reply out, with usage. The engine knows nothing else."""
 
     name: str
+    # optional (change 0002): `tool_mode`, "native" (tool calls, the default) or "structured" (JSON
+    # choose and fill steps); `context_tokens`, the most the model is shown at once (None: no limit)
 
     def complete(
         self,
@@ -98,6 +100,14 @@ def tool_definition(name: str, description: str, parameters: dict[str, Any]) -> 
     }
 
 
+def effective_tool_mode(endpoint: ModelEndpoint) -> str:
+    """`auto` is `structured` when the endpoint's structured-reply test passed, `native` otherwise (0002)."""
+    if endpoint.tool_mode != "auto":
+        return endpoint.tool_mode
+    structured = endpoint.tests.get("structured")
+    return "structured" if structured is not None and structured.status == "passed" else "native"
+
+
 class OpenAICompatible:
     """The chat completions API of any OpenAI-compatible endpoint (design §13.1, D-009)."""
 
@@ -105,6 +115,8 @@ class OpenAICompatible:
         self.endpoint = endpoint
         self.api_key = api_key
         self.name = endpoint.model
+        self.tool_mode = effective_tool_mode(endpoint)
+        self.context_tokens = endpoint.limits.context_tokens
 
     def _request(self, path: str, body: dict[str, Any] | None, *, stream: bool = False) -> Any:
         url = self.endpoint.base_url.rstrip("/") + path
@@ -154,6 +166,8 @@ class OpenAICompatible:
             "messages": messages,
             "max_tokens": max_tokens or self.endpoint.limits.max_tokens,
         }
+        if self.endpoint.temperature is not None:
+            body["temperature"] = self.endpoint.temperature
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

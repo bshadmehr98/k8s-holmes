@@ -98,6 +98,7 @@ src/k8sholmes/
     extensions.py       entry points and command capabilities from TOML (§5.5)
     builtin.py          the registry with every built-in capability and the loaded extensions
   engine.py             the investigation engine (§6): framing, discovery, gathering, concluding, follow-up
+  actions.py            the structured tool mode: the choose and fill steps, their schemas and repairs (0002)
   thread.py             what the model sees: the system prompt, the schemas, the context, the thread (§6.2)
   prompts/              the system prompt and the output schemas the engine sends (plain text files)
   evidence.py           evidence records, coverage, redaction, size caps (§7)
@@ -280,7 +281,19 @@ summary and data (capped) as the tool message. Budgets are settings per investig
 concludes with what it has, marked `partial` with the reason. Three invalid calls in a row also end
 gathering (change 0002): the investigation gets a **notice** saying plainly why it stopped and which calls
 were refused, a limitation, and concludes `partial`; a resume starts a fresh count. The framing's intended
-capabilities are limited to the available ids. Contradictions are the model's job to
+capabilities are limited to the available ids. In the **structured tool mode** (change 0002) a step is two
+small JSON decisions under `response_format`: *choose* (the next capability, from an enum of the available
+ids with the framing's intended ones first, or `done`) and *fill* (that one capability's inputs, under its
+own schema); code turns them into the same tool call, the result returns as a context message marked as
+data, and a reply that is not the object asked for gets one repair request, then becomes an invalid call.
+A structured step makes one call; `calls_per_step` applies to tool calls. With an endpoint's
+`context_tokens` set, every request (its tools and schema counted, the concluding one too) shows the
+newest four results in full and older ones by their evidence id, status, summary and coverage until the
+estimate (characters ÷ 4) fits; when even that is too large, the investigation says so once as a
+limitation. The stored thread is unchanged. Every model call records the endpoint's tool mode, and a
+structured gathering call its step (`choose` or `fill`); the investigation page shows the mode next to the
+model.
+Contradictions are the model's job to
 handle; the engine makes them visible by keeping every result, including the ones that contradict the
 framing's hypotheses.
 
@@ -498,7 +511,9 @@ is the summary and a link, never evidence bodies.
 ```text
 ModelEndpoint
   id, name, base_url, model, api_key (in the secrets file, §14.3), headers (optional)
-  limits        max_tokens per reply, timeout_ms, tokens per investigation, tokens per day
+  limits        max_tokens per reply, timeout_ms, tokens per investigation, tokens per day, context_tokens (optional)
+  tool_mode     auto | native | structured (§6.2); auto is structured when the structured-reply test passed
+  temperature   optional; sent with every call when set
   price         optional input and output price per million tokens, for usage display
   capabilities  the results of the last capability test (§13.2)
   default       one endpoint is the default; an environment may name its own
@@ -756,6 +771,9 @@ is removed.
 
 Added by [change 0002](changes/0002-small-model-tool-calling.md):
 
+25. **Structured mode gathers.** With an endpoint in `structured` mode, a scripted model's choose and fill
+    replies produce the same calls and evidence as the same requests in `native` mode; a reply that is not
+    JSON is repaired once and then recorded as an invalid call, never a failed investigation.
 26. **Errors teach.** An invalid call's tool message names the field, lists the accepted fields and
     suggests the closest field or known value; it is plain text.
 27. **A stuck model stops.** Three consecutive invalid calls end gathering with a limitation naming the
@@ -767,6 +785,9 @@ Added by [change 0002](changes/0002-small-model-tool-calling.md):
     available ids.
 29. **Aliases are recorded.** `label_selector` and `kind: "po"` are accepted and stored as `selector` and
     `Pod` with what was sent in `received`; an undeclared extra field is still refused (guarantee 2).
+31. **The context is bounded.** With `context_tokens` set, every gathering request fits the limit, older
+    results appear as summary and evidence id, and the stored thread and evidence are unchanged; a set
+    temperature is sent on every call.
 
 ## 19. Implemented and planned
 
@@ -825,9 +846,13 @@ checked by validation, accepted field aliases and kind names with what the model
 intended capabilities limited to the catalog, resuming with another model (§5.1, §6.2, §13.3, §15.2).
 Guarantees 26 to 29 are tested.
 
-**Planned:** change 0002 pieces B (the structured tool mode, fewer choices per decision, a bounded
-context and a set temperature; guarantees 25 and 31) and C (playbooks; guarantee 30); anything else is a
-new change record.
+**Implemented (change 0002, piece B, 2026-11-22):** the structured tool mode with its choose and fill
+steps, repairs and data messages, `auto` resolving from the structured-reply test; the intended
+capabilities first in both modes; an endpoint's temperature and context limit, with older results
+compacted in what the model sees; the tool mode, temperature and context on the models page and in the
+API (§6.2, §13.1). Guarantees 25 and 31 are tested.
+
+**Planned:** change 0002 piece C (playbooks; guarantee 30); anything else is a new change record.
 
 ## 20. Known limits (0.1)
 

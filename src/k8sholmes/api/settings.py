@@ -6,7 +6,14 @@ from typing import Any, cast
 
 from k8sholmes.api import Api, Request, Response, dump, route
 from k8sholmes.errors import InvalidInput
-from k8sholmes.models import OpenAICompatible, api_key_for, price_of, run_capability_tests, write_secret
+from k8sholmes.models import (
+    OpenAICompatible,
+    api_key_for,
+    effective_tool_mode,
+    price_of,
+    run_capability_tests,
+    write_secret,
+)
 from k8sholmes.records import AuditEntry, Environment, ModelCall, ModelEndpoint, ModelLimits, ModelPrice, User
 
 
@@ -15,6 +22,7 @@ def _endpoint_row(api: Api, endpoint: ModelEndpoint) -> dict[str, Any]:
     prompt, completion = sum(c.prompt_tokens for c in calls), sum(c.completion_tokens for c in calls)
     row = dump(endpoint)
     row["has_key"] = api_key_for(endpoint, api.app.home) is not None
+    row["effective_tool_mode"] = effective_tool_mode(endpoint)
     row["usage"] = {
         "calls": len(calls),
         "prompt_tokens": prompt,
@@ -22,6 +30,16 @@ def _endpoint_row(api: Api, endpoint: ModelEndpoint) -> dict[str, Any]:
         "price": price_of(endpoint, prompt, completion),
     }
     return row
+
+
+def _sampling(body: dict[str, Any]) -> dict[str, Any]:
+    """The tool mode and temperature a request sets (0002, parts 1 and 7); validated by the record."""
+    out: dict[str, Any] = {}
+    if "tool_mode" in body:
+        out["tool_mode"] = body["tool_mode"] or "auto"
+    if "temperature" in body:
+        out["temperature"] = None if body["temperature"] in (None, "") else float(body["temperature"])
+    return out
 
 
 @route("GET", "/api/models")
@@ -44,6 +62,7 @@ def add_model(api: Api, req: Request, params: dict[str, str]) -> Response:
         api_key_env=body.get("api_key_env") or None,
         limits=ModelLimits.model_validate(body.get("limits") or {}),
         price=ModelPrice.model_validate(body["price"]) if body.get("price") else None,
+        **_sampling(body),
         is_default=not api.app.store.find(ModelEndpoint, {"is_default": True}),
     )
     if not endpoint.base_url.startswith(("http://", "https://")) or not endpoint.model:
@@ -65,13 +84,16 @@ def edit_model(api: Api, req: Request, params: dict[str, str]) -> Response:
     user = api.admin(req)
     endpoint = api.app.store.get(ModelEndpoint, params["id"])
     body = api.body(req)
-    if body.get("is_default"):
-        for other in api.app.store.find(ModelEndpoint, {"is_default": True}):
-            api.app.store.put(other.model_copy(update={"is_default": False}))
-        endpoint = endpoint.model_copy(update={"is_default": True})
+    changes = _sampling(body)
     if "limits" in body:
-        endpoint = endpoint.model_copy(update={"limits": ModelLimits.model_validate(body["limits"])})
-    api.app.store.put(endpoint)
+        changes["limits"] = ModelLimits.model_validate(body["limits"]).model_dump()
+    endpoint = ModelEndpoint.model_validate({**endpoint.model_dump(), **changes})  # all checks first
+    with api.app.store.transaction():
+        if body.get("is_default"):
+            for other in api.app.store.find(ModelEndpoint, {"is_default": True}):
+                api.app.store.put(other.model_copy(update={"is_default": False}))
+            endpoint = endpoint.model_copy(update={"is_default": True})
+        api.app.store.put(endpoint)
     api.app.auth.audit(user.id, "model_endpoint_changed", subject=f"model:{endpoint.id}")
     return Response(200, {"endpoint": _endpoint_row(api, endpoint)})
 

@@ -11,8 +11,8 @@ import time
 from collections.abc import Callable
 from typing import Any, cast
 
+from k8sholmes import actions, knowledge, thread
 from k8sholmes import findings as findings_mod
-from k8sholmes import knowledge, thread
 from k8sholmes.auth import Auth
 from k8sholmes.capabilities import Capability, Context, Registry
 from k8sholmes.capabilities.inputs import known_for
@@ -31,7 +31,6 @@ from k8sholmes.records import (
     Investigation,
     Message,
     ModelCall,
-    Notice,
     Period,
     Phase,
     Scope,
@@ -43,7 +42,6 @@ from k8sholmes.records import (
 from k8sholmes.store import Store
 
 RETRY_BACKOFF_S = (1.0, 3.0)
-STUCK_AFTER = 3  # consecutive invalid calls that end gathering (0002, part 2)
 RESUMABLE = ("cancelled", "interrupted", "partial", "failed")
 EventHook = Callable[[str, dict[str, Any]], None]
 
@@ -314,15 +312,11 @@ class Engine:
         started: float,
     ) -> Investigation:
         available, unavailable = self._capabilities(environment, user)
+        framing = inv.framing or Framing(question=inv.question)
+        available = actions.ordered(available, framing.intended_capabilities)  # 0002, part 4
         ctx = self._context(inv, environment, cluster, user)
-        tools = [
-            tool_definition(
-                c.id,
-                f"{c.title}. {c.purpose}",
-                c.schema(ctx.known, self.registry.settings_for(c, environment).namespaces),
-            )
-            for c in available
-        ]
+        structured = getattr(model, "tool_mode", "native") == "structured"
+        turn = self._structured_turn if structured else self._native_turn
         streak: list[Call] = []  # the latest consecutive invalid calls
         while True:
             inv = self.store.get(Investigation, inv.id)
@@ -333,37 +327,70 @@ class Engine:
                 return self._update(inv, limitations=[*inv.limitations, limitation])
             step = self._begin_step(inv, "gathering")
             messages = thread.messages_for(self.store, inv, environment, available, unavailable)
-            reply, inv = self._call_model(inv, model, "gathering", messages, tools=tools)
+            content, tool_calls, inv = turn(inv, model, messages, available, ctx)
             round_ = self._round(inv)
             self._append(
                 inv,
                 "assistant",
-                reply.content,
+                content,
                 author=f"model:{model.name}",
-                tool_calls=reply.tool_calls,
+                tool_calls=[] if structured else tool_calls,
                 round_=round_,
             )
-            if not reply.tool_calls:
+            if not tool_calls:
                 self._end_step(inv, step, "the model has what it needs")
                 return self.store.get(Investigation, inv.id)
-            summaries, calls = self._run_tool_calls(inv, step, reply.tool_calls, ctx, round_)
+            summaries, calls = self._run_tool_calls(inv, step, tool_calls, ctx, round_, structured=structured)
             self._end_step(inv, step, "; ".join(summaries))
             for call in calls:
                 streak = [*streak, call] if call.status == "invalid" else []
-            if len(streak) >= STUCK_AFTER:
-                return self._stop_invalid(inv, streak[-STUCK_AFTER:])
+            if len(streak) >= thread.STUCK_AFTER:
+                return self._stop_invalid(inv, streak[-thread.STUCK_AFTER :])
+
+    def _native_turn(
+        self,
+        inv: Investigation,
+        model: Model,
+        messages: list[dict[str, Any]],
+        available: list[Capability],
+        ctx: Context,
+    ) -> tuple[str, list[ToolCall], Investigation]:
+        """The model sees every available capability as a tool and writes tool calls."""
+        allow = self.registry.settings_for
+        tools = [
+            tool_definition(
+                c.id, f"{c.title}. {c.purpose}", c.schema(ctx.known, allow(c, ctx.environment).namespaces)
+            )
+            for c in available
+        ]
+        reply, inv = self._call_model(inv, model, "gathering", messages, tools=tools)
+        return reply.content, reply.tool_calls, inv
+
+    def _structured_turn(
+        self,
+        inv: Investigation,
+        model: Model,
+        messages: list[dict[str, Any]],
+        available: list[Capability],
+        ctx: Context,
+    ) -> tuple[str, list[ToolCall], Investigation]:
+        """Two small JSON decisions, choose and fill (0002, parts 1 and 4); usage is recorded per call."""
+
+        def ask(msgs: list[dict[str, Any]], schema: dict[str, Any], step: str) -> str:
+            nonlocal inv
+            reply, inv = self._call_model(inv, model, "gathering", msgs, schema=schema, step=step)
+            return reply.content
+
+        def allow(cap: Capability) -> list[str]:
+            return self.registry.settings_for(cap, ctx.environment).namespaces
+
+        call, content = actions.structured_turn(ask, messages, available, ctx.known, allow)
+        return content, [call] if call else [], inv
 
     def _stop_invalid(self, inv: Investigation, last: list[Call]) -> Investigation:
         """The model sent invalid inputs again and again: stop gathering and say so plainly (0002, part 2)."""
-        capability = ", ".join(sorted({c.capability_id for c in last}))
-        text = (
-            f"The model stopped gathering: it sent invalid inputs ({capability}) {STUCK_AFTER} times in a "
-            "row. The answer below uses only the evidence gathered before that. A stronger model, or the "
-            "structured tool mode, may do better; resume to try again."
-        )
-        notice = Notice(kind="stopped_invalid", text=text, call_ids=[c.id for c in last])
+        notice, limitation = thread.stopped_notice(last)
         fresh = self.store.get(Investigation, inv.id)
-        limitation = f"the model could not form valid inputs for {capability}"
         updated = self._update(
             fresh, notices=[*fresh.notices, notice], limitations=[*fresh.limitations, limitation]
         )
@@ -371,9 +398,17 @@ class Engine:
         return updated
 
     def _run_tool_calls(
-        self, inv: Investigation, step: Step, tool_calls: list[ToolCall], ctx: Context, round_: int
+        self,
+        inv: Investigation,
+        step: Step,
+        tool_calls: list[ToolCall],
+        ctx: Context,
+        round_: int,
+        *,
+        structured: bool = False,
     ) -> tuple[list[str], list[Call]]:
-        """Run each requested capability through the gate; record the call, the evidence, the tool message."""
+        """Run each requested capability through the gate; record the call, the evidence, the result
+        message (a tool message, or in the structured mode a context message marked as data)."""
         summaries: list[str] = []
         calls: list[Call] = []
         for tool_call in tool_calls[: inv.budgets.calls_per_step]:
@@ -384,12 +419,16 @@ class Engine:
                 self.store.put(call)
                 if evidence is not None:
                     self.store.put(evidence)
+                if structured:  # no tool call to answer: a context message marked as data
+                    role, content, answers = "user", thread.result_message(call, evidence), None
+                else:
+                    role, content, answers = "tool", thread.tool_message(call, evidence), tool_call.id
                 self._append(
                     inv,
-                    "tool",
-                    thread.tool_message(call, evidence),
+                    role,
+                    content,
                     author=f"capability:{tool_call.name}",
-                    tool_call_id=tool_call.id,
+                    tool_call_id=answers,
                     round_=round_,
                 )
             calls.append(call)
@@ -474,7 +513,9 @@ class Engine:
         ]
         started = self.clock()
         try:  # one call, no retries, and the investigation's own usage and model name stay untouched
-            reply = model.complete(messages, schema=thread.CONCLUSION_SCHEMA)
+            limit = getattr(model, "context_tokens", None)
+            fitted = thread.fit(messages, limit, thread.tokens_of(thread.CONCLUSION_SCHEMA))
+            reply = model.complete(fitted, schema=thread.CONCLUSION_SCHEMA)
         except ModelFailure as exc:
             duration_ms = int((self.clock() - started) * 1000)
             self._record_model_call(
@@ -524,8 +565,16 @@ class Engine:
         *,
         tools: list[dict[str, Any]] | None = None,
         schema: dict[str, Any] | None = None,
+        step: str | None = None,
     ) -> tuple[Reply, Investigation]:
-        """One model call with retries for retryable failures only, on the same endpoint; usage recorded."""
+        """One model call with retries for retryable failures only, on the same endpoint; usage recorded.
+        With the model's context limit, older results are compacted to fit (0002, part 7)."""
+        mode = getattr(model, "tool_mode", "native")
+        limit = getattr(model, "context_tokens", None)
+        reserve = thread.tokens_of(tools or []) + thread.tokens_of(schema or {})
+        messages = thread.fit(messages, limit, reserve)
+        if limit and thread.tokens_of(messages) + reserve > limit:
+            inv = self._note_over_limit(inv, limit, thread.tokens_of(messages) + reserve)
         for attempt in range(3):
             started = self.clock()
             try:
@@ -539,12 +588,16 @@ class Engine:
                     duration_ms=int((self.clock() - started) * 1000),
                     status="retried" if retry else "failed",
                     error=str(exc),
+                    mode=mode,
+                    step=step,
                 )
                 if not retry:
                     raise
                 self.sleep(RETRY_BACKOFF_S[attempt])
                 continue
-            self._record_model_call(inv, model, phase, duration_ms=reply.duration_ms, reply=reply)
+            self._record_model_call(
+                inv, model, phase, duration_ms=reply.duration_ms, reply=reply, mode=mode, step=step
+            )
             usage = inv.usage.model_copy(
                 update={
                     "model_calls": inv.usage.model_calls + 1,
@@ -553,7 +606,7 @@ class Engine:
                     "duration_ms": inv.usage.duration_ms + reply.duration_ms,
                 }
             )
-            inv = self._update(inv, usage=usage, model_name=model.name)
+            inv = self._update(inv, usage=usage, model_name=model.name, tool_mode=mode)
             self._emit(
                 "model_call",
                 {
@@ -567,6 +620,15 @@ class Engine:
             "the model failed", retryable=False
         )  # pragma: no cover - the loop raises or returns
 
+    def _note_over_limit(self, inv: Investigation, limit: int, tokens: int) -> Investigation:
+        """Said once: even with every older result compacted, a request is larger than the limit."""
+        start = f"the context limit ({limit} tokens) is smaller than a request"
+        fresh = self.store.get(Investigation, inv.id)
+        if any(lim.startswith(start) for lim in fresh.limitations):
+            return fresh
+        text = f"{start} even with older results compacted (about {tokens} tokens); the model was sent more"
+        return self._update(fresh, limitations=[*fresh.limitations, text])
+
     def _record_model_call(
         self,
         inv: Investigation,
@@ -577,6 +639,8 @@ class Engine:
         reply: Reply | None = None,
         status: str = "ok",
         error: str | None = None,
+        mode: str | None = None,
+        step: str | None = None,
     ) -> None:
         self.store.put(
             ModelCall(
@@ -589,6 +653,8 @@ class Engine:
                 duration_ms=duration_ms,
                 status=cast(Any, status),
                 error=error,
+                mode=mode,
+                step=step,
             )
         )
 
