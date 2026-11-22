@@ -296,6 +296,10 @@ def test_temperature_and_the_tool_mode_of_an_endpoint(endpoint: records.ModelEnd
     cool = endpoint.model_copy(update={"temperature": 0.2})
     OpenAICompatible(cool, "sk-test-key").complete([{"role": "user", "content": "hi"}], max_tokens=5)
     assert SEEN[-1]["body"]["temperature"] == 0.2
+    cooled = OpenAICompatible(cool, "sk-test-key")
+    cooled.complete([{"role": "user", "content": "count"}], stream=True)
+    cooled.complete([{"role": "user", "content": "6*7?"}], schema={"title": "a", "type": "object"})
+    assert all(seen["body"]["temperature"] == 0.2 for seen in SEEN[-2:])  # streamed and structured too
     passed = records.CapabilityTestResult(status="passed")
     assert effective_tool_mode(endpoint) == "native"  # auto, untested
     tested = endpoint.model_copy(update={"tests": {"structured": passed}})

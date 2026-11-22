@@ -36,6 +36,7 @@ FIELD_ALIASES: dict[str, str] = {
     "ns": "namespace",
     "resource_name": "name",
 }
+NOT_JSON = "(not a JSON object)"  # the key a structured fill that never parsed is sent under (0002)
 MAX_ENUM = 200  # above this many namespaces the field stays free text; suggestions do the work
 
 
@@ -143,6 +144,9 @@ def explain(capability_id: str, model: type[BaseModel], problems: list[tuple[str
     fields = list(model.model_fields)
     lines = [f"{capability_id}: invalid inputs"]
     for name, message, unknown_field in problems:
+        if name == NOT_JSON:
+            lines.append("- the inputs were not a JSON object")
+            continue
         hint = ""
         if unknown_field:
             alias = FIELD_ALIASES.get(name)

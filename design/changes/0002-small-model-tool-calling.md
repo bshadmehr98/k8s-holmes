@@ -180,10 +180,11 @@ events). Playbooks are built in; extensions of playbooks are not part of this ch
 
 ### 7. A bounded context and a set temperature
 
-- An endpoint's `limits` gets optional `context_tokens`. When set, `thread.messages_for` shows the model
-  the newest four rounds in full and older tool results as their summary, coverage and evidence id, until
-  the estimate (characters ÷ 4) fits; the stored thread and evidence are unchanged (like D-017).
-- An endpoint gets optional `temperature`, sent with every call when set. The Settings page suggests 0 to
+- An endpoint's `limits` gets optional `context_tokens` (at least 1000). When set, every request (its
+  tools and schema counted) shows the newest four results in full and older ones as their summary,
+  coverage and evidence id, until the estimate (characters ÷ 4) fits; a request that still does not fit
+  adds one limitation; the stored thread and evidence are unchanged (like D-017).
+- An endpoint gets optional `temperature` (0 to 2), sent with every call when set. The Settings page suggests 0 to
   0.3 for local models in structured mode.
 - `docs/setup.md` says that Ollama truncates a prompt silently beyond its context length
   (`OLLAMA_CONTEXT_LENGTH`), and that `context_tokens` should not exceed it.
@@ -241,8 +242,9 @@ the rest, so it does not grow.
   repair, compaction, the stuck-model counter, playbook fan-out and its cap.
 - Contract: the OpenAI-compatible client sends `temperature` and the action schemas under
   `response_format`; `ScriptedModel` answers choose and fill steps.
-- Acceptance: `tests/e2e/test_ac25` to `test_ac31` on the demo recording, and the five demo scenarios of
-  §17.2 rerun in both modes (guarantee 22 holds in both).
+- Acceptance: `tests/e2e/test_ac25` to `test_ac31` on the demo recording. The demo's offline
+  investigator is rule-based and stays native; guarantee 25 compares a structured run with a native one
+  call by call instead.
 - By hand: `tests/cluster/` rerun, since evidence gathering changes; a new `tests/hosted/` case runs the
   demo questions against a configured local model in `structured` mode and reports how many calls were
   valid and whether it concluded. It measures; it does not assert model quality.

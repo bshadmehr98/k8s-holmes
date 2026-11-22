@@ -10,22 +10,26 @@ engine runs like any other: validation, the gate, the recorded call and evidence
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
 from k8sholmes.capabilities import Capability
-from k8sholmes.capabilities.inputs import Known
+from k8sholmes.capabilities.inputs import NOT_JSON, Known
 from k8sholmes.records import ToolCall, new_id
 from k8sholmes.thread import json_object
 
 DONE = "done"
 # ask(messages, schema, step) -> the reply's text; the engine records the call and its usage
 Ask = Callable[[list[dict[str, Any]], dict[str, Any], str], str]
-Problem = Callable[[dict[str, Any]], str | None]  # what is wrong with a reply, or None
+Problem = Callable[[dict[str, Any] | None], str | None]  # what is wrong with a reply, or None
+NOT_AN_OBJECT = "the reply was not a JSON object"
 
 
-def _not_empty(payload: dict[str, Any]) -> str | None:
-    return None if payload else "the reply was not a JSON object"
+def parsed(text: str) -> dict[str, Any] | None:
+    """The reply's JSON object, or None when there is none: `{}` is an answer, prose is not."""
+    payload = json_object(text)
+    return payload if payload or re.search(r"\{\s*\}", text) else None
 
 
 def ordered(available: list[Capability], intended: list[str]) -> list[Capability]:
@@ -57,10 +61,6 @@ def choose_message(available: list[Capability]) -> dict[str, Any]:
     }
 
 
-def fill_schema(cap: Capability, known: Known | None, allow: list[str]) -> dict[str, Any]:
-    return {"title": "inputs", **cap.schema(known, allow)}
-
-
 def fill_message(cap: Capability) -> dict[str, Any]:
     return {
         "role": "user",
@@ -68,22 +68,29 @@ def fill_message(cap: Capability) -> dict[str, Any]:
     }
 
 
-def _choice_problem(payload: dict[str, Any], ids: list[str]) -> str | None:
+def _is_done(choice: dict[str, Any]) -> bool:
+    return choice.get("action") == DONE or choice.get("capability") == DONE
+
+
+def _choice_problem(payload: dict[str, Any] | None, ids: list[str]) -> str | None:
     if not payload:
-        return "the reply was not a JSON object"
-    if payload.get("action") == DONE or payload.get("capability") == DONE:
-        return None
-    if payload.get("capability") not in ids:
+        return NOT_AN_OBJECT
+    if not _is_done(payload) and payload.get("capability") not in ids:
         return f"capability must be one of {', '.join(ids)} or done"
     return None
 
 
+def _fill_problem(payload: dict[str, Any] | None) -> str | None:
+    return NOT_AN_OBJECT if payload is None else None
+
+
 def _ask_json(
     ask: Ask, messages: list[dict[str, Any]], schema: dict[str, Any], step: str, problem: Problem
-) -> dict[str, Any]:
-    """The reply as a dict, with one repair request when it is not the object asked for."""
+) -> tuple[dict[str, Any] | None, str]:
+    """The reply as a dict (None: no JSON object) and its text, with one repair request when it is not
+    the object asked for."""
     content = ask(messages, schema, step)
-    payload = json_object(content)
+    payload = parsed(content)
     issue = problem(payload)
     if issue:
         repair = [
@@ -95,8 +102,8 @@ def _ask_json(
             },
         ]
         content = ask(repair, schema, step)
-        payload = json_object(content)
-    return payload
+        payload = parsed(content)
+    return payload, content
 
 
 def structured_turn(
@@ -107,36 +114,23 @@ def structured_turn(
     allow_for: Callable[[Capability], list[str]],
 ) -> tuple[ToolCall | None, str]:
     """One gathering step: choose, then fill. Returns the call to run (None: the model is done) and the
-    text kept in the thread as the model's turn."""
+    text kept in the thread as the model's turn. A choice or inputs that are still wrong after the repair
+    become a call the registry records as invalid, counted like any other."""
     ids = [c.id for c in available]
-    choice = _ask_json(
-        ask,
-        [*messages, choose_message(available)],
-        choose_schema(available),
-        "choose",
-        lambda payload: _choice_problem(payload, ids),
-    )
+    asking = [*messages, choose_message(available)]
+    choice, _ = _ask_json(ask, asking, choose_schema(available), "choose", lambda p: _choice_problem(p, ids))
+    choice = choice or {}
     why = str(choice.get("why") or "")
-    if choice.get("action") == DONE or choice.get("capability") == DONE:
+    if _is_done(choice):
         return None, json.dumps({"action": DONE, "why": why})
     chosen = next((c for c in available if c.id == choice.get("capability")), None)
-    if chosen is None:  # still not a capability after the repair: an invalid call, counted like any other
+    if chosen is None:
         name = str(choice.get("capability") or "(no capability chosen)")
-        return ToolCall(id=new_id("act"), name=name, arguments={}), json.dumps(
-            {"action": "call", "capability": name, "why": why}
-        )
-    turn = [
-        *messages,
-        choose_message(available),
-        {"role": "assistant", "content": json.dumps(choice)},
-        fill_message(chosen),
-    ]
-    inputs = _ask_json(
-        ask,
-        turn,
-        fill_schema(chosen, known, allow_for(chosen)),
-        "fill",
-        _not_empty,
-    )
-    action = {"action": "call", "capability": chosen.id, "inputs": inputs, "why": why}
-    return ToolCall(id=new_id("act"), name=chosen.id, arguments=inputs), json.dumps(action)
+        action = {"action": "call", "capability": name, "why": why}
+        return ToolCall(id=new_id("act"), name=name, arguments={}), json.dumps(action)
+    turn = [*asking, {"role": "assistant", "content": json.dumps(choice)}, fill_message(chosen)]
+    schema = {"title": "inputs", **chosen.schema(known, allow_for(chosen))}
+    inputs, content = _ask_json(ask, turn, schema, "fill", _fill_problem)
+    arguments = inputs if inputs is not None else {NOT_JSON: content[:200]}
+    action = {"action": "call", "capability": chosen.id, "inputs": arguments, "why": why}
+    return ToolCall(id=new_id("act"), name=chosen.id, arguments=arguments), json.dumps(action)

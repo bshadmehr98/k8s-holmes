@@ -152,10 +152,8 @@ def messages_for(
     environment: Environment,
     available: list[Capability],
     unavailable: list[tuple[str, str]],
-    context_tokens: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Everything the model sees on a gathering or concluding turn: the prompt, the context, the thread;
-    with `context_tokens`, older results are shown by their summary until the estimate fits."""
+    """Everything the model sees on a gathering or concluding turn: the prompt, the context, the thread."""
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         context_message(store, inv, environment, available, unavailable),
@@ -188,29 +186,38 @@ def messages_for(
                         ),
                     }
                 )
-    if context_tokens:
-        results = [i for i, m in enumerate(stored) if m.author.startswith("capability:")]
-        compact(messages, [i + 2 for i in results[:-KEEP_FULL]], context_tokens)
     return messages
 
 
-def tokens_of(messages: list[dict[str, Any]]) -> int:
+def tokens_of(payload: Any) -> int:
     """A rough estimate: four characters a token."""
-    return len(json.dumps(messages, default=str)) // 4
+    return len(json.dumps(payload, default=str)) // 4
 
 
-def compact(messages: list[dict[str, Any]], older: list[int], limit: int) -> None:
-    """Replace the oldest results with their evidence id, status, summary and coverage until the
-    estimate fits `limit`; the stored thread and the evidence are untouched (0002, part 7)."""
-    for index in older:
-        if tokens_of(messages) <= limit:
-            return
-        content = str(messages[index]["content"])
-        payload = json_object(content[content.find("{") :]) if "{" in content else {}
+def _is_result(message: dict[str, Any]) -> bool:
+    content = str(message.get("content", ""))
+    return message.get("role") == "tool" or content.startswith("Result of ")
+
+
+def fit(messages: list[dict[str, Any]], limit: int | None, reserve: int = 0) -> list[dict[str, Any]]:
+    """`messages` with the oldest results, all but the newest four, shown by their evidence id, status,
+    summary and coverage until the estimate plus `reserve` (tools, a schema) fits `limit` (0002, part 7).
+    A copy: the stored thread and the evidence are untouched."""
+    if not limit or tokens_of(messages) + reserve <= limit:
+        return messages
+    out = [dict(m) for m in messages]
+    results = [i for i, m in enumerate(out) if _is_result(m)]
+    for index in results[:-KEEP_FULL]:
+        if tokens_of(out) + reserve <= limit:
+            break
+        head, _, body = str(out[index]["content"]).rpartition("\n")
+        payload = json_object(body)
         keep = {k: payload[k] for k in ("evidence_id", "status", "summary", "coverage") if k in payload}
-        short = {**keep, "note": "an older result, shown by its summary; the full record is evidence"}
-        prefix = content.split("\n", 1)[0] + "\n" if content.startswith("Result of") else ""
-        messages[index]["content"] = prefix + json.dumps(short) if keep else content[:300]
+        short = json.dumps(
+            {**keep, "note": "an older result, shown by its summary; the full record is evidence"}
+        )
+        out[index]["content"] = (f"{head}\n" if head else "") + short if keep else body[:300]
+    return out
 
 
 def _size(data: Any) -> int:

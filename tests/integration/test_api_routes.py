@@ -175,8 +175,30 @@ def test_environments_capabilities_knowledge_users_and_audit(tmp_path: Path) -> 
         )["endpoint"]
         assert (tuned["effective_tool_mode"], tuned["temperature"]) == ("structured", 0.2)
         assert tuned["limits"]["context_tokens"] == 8000
-        status, _ = admin.call("PATCH", f"/api/models/{added_model['id']}", {"tool_mode": "telepathy"})
-        assert status == 400
+        for bad in (
+            {"tool_mode": "telepathy"},
+            {"temperature": "abc"},
+            {"temperature": 3},
+            {"limits": {"context_tokens": 10}},
+        ):
+            status, payload = admin.call(
+                "PATCH", f"/api/models/{added_model['id']}", {"is_default": False, **bad}
+            )
+            assert status == 400 and payload["error"], bad
+        still = next(m for m in admin.ok("GET", "/api/models")["endpoints"] if m["id"] == added_model["id"])
+        assert still["is_default"] is True and still["temperature"] == 0.2  # a refused change changes nothing
+        made = admin.ok(
+            "POST",
+            "/api/models",
+            {
+                "name": "local",
+                "base_url": "http://127.0.0.1:1/v1",
+                "model": "m",
+                "tool_mode": "structured",
+                "temperature": 0.1,
+            },
+        )["endpoint"]
+        assert (made["tool_mode"], made["temperature"]) == ("structured", 0.1)
         cleared = admin.ok("PATCH", f"/api/models/{added_model['id']}", {"tool_mode": "", "temperature": ""})
         assert (cleared["endpoint"]["tool_mode"], cleared["endpoint"]["temperature"]) == ("auto", None)
         assert (

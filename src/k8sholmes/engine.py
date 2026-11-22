@@ -326,9 +326,7 @@ class Engine:
             if limitation:
                 return self._update(inv, limitations=[*inv.limitations, limitation])
             step = self._begin_step(inv, "gathering")
-            messages = thread.messages_for(
-                self.store, inv, environment, available, unavailable, getattr(model, "context_tokens", None)
-            )
+            messages = thread.messages_for(self.store, inv, environment, available, unavailable)
             content, tool_calls, inv = turn(inv, model, messages, available, ctx)
             round_ = self._round(inv)
             self._append(
@@ -365,7 +363,7 @@ class Engine:
             )
             for c in available
         ]
-        reply, inv = self._call_model(inv, model, "gathering", messages, tools=tools, mode="native")
+        reply, inv = self._call_model(inv, model, "gathering", messages, tools=tools)
         return reply.content, reply.tool_calls, inv
 
     def _structured_turn(
@@ -377,19 +375,17 @@ class Engine:
         ctx: Context,
     ) -> tuple[str, list[ToolCall], Investigation]:
         """Two small JSON decisions, choose and fill (0002, parts 1 and 4); usage is recorded per call."""
-        current = [inv]
 
         def ask(msgs: list[dict[str, Any]], schema: dict[str, Any], step: str) -> str:
-            reply, current[0] = self._call_model(
-                current[0], model, "gathering", msgs, schema=schema, mode=step
-            )
+            nonlocal inv
+            reply, inv = self._call_model(inv, model, "gathering", msgs, schema=schema, step=step)
             return reply.content
 
         def allow(cap: Capability) -> list[str]:
             return self.registry.settings_for(cap, ctx.environment).namespaces
 
         call, content = actions.structured_turn(ask, messages, available, ctx.known, allow)
-        return content, [call] if call else [], current[0]
+        return content, [call] if call else [], inv
 
     def _stop_invalid(self, inv: Investigation, last: list[Call]) -> Investigation:
         """The model sent invalid inputs again and again: stop gathering and say so plainly (0002, part 2)."""
@@ -423,14 +419,16 @@ class Engine:
                 self.store.put(call)
                 if evidence is not None:
                     self.store.put(evidence)
+                if structured:  # no tool call to answer: a context message marked as data
+                    role, content, answers = "user", thread.result_message(call, evidence), None
+                else:
+                    role, content, answers = "tool", thread.tool_message(call, evidence), tool_call.id
                 self._append(
                     inv,
-                    "user" if structured else "tool",
-                    thread.result_message(call, evidence)
-                    if structured
-                    else thread.tool_message(call, evidence),
+                    role,
+                    content,
                     author=f"capability:{tool_call.name}",
-                    tool_call_id=None if structured else tool_call.id,
+                    tool_call_id=answers,
                     round_=round_,
                 )
             calls.append(call)
@@ -515,7 +513,9 @@ class Engine:
         ]
         started = self.clock()
         try:  # one call, no retries, and the investigation's own usage and model name stay untouched
-            reply = model.complete(messages, schema=thread.CONCLUSION_SCHEMA)
+            limit = getattr(model, "context_tokens", None)
+            fitted = thread.fit(messages, limit, thread.tokens_of(thread.CONCLUSION_SCHEMA))
+            reply = model.complete(fitted, schema=thread.CONCLUSION_SCHEMA)
         except ModelFailure as exc:
             duration_ms = int((self.clock() - started) * 1000)
             self._record_model_call(
@@ -565,9 +565,16 @@ class Engine:
         *,
         tools: list[dict[str, Any]] | None = None,
         schema: dict[str, Any] | None = None,
-        mode: str | None = None,
+        step: str | None = None,
     ) -> tuple[Reply, Investigation]:
-        """One model call with retries for retryable failures only, on the same endpoint; usage recorded."""
+        """One model call with retries for retryable failures only, on the same endpoint; usage recorded.
+        With the model's context limit, older results are compacted to fit (0002, part 7)."""
+        mode = getattr(model, "tool_mode", "native")
+        limit = getattr(model, "context_tokens", None)
+        reserve = thread.tokens_of(tools or []) + thread.tokens_of(schema or {})
+        messages = thread.fit(messages, limit, reserve)
+        if limit and thread.tokens_of(messages) + reserve > limit:
+            inv = self._note_over_limit(inv, limit, thread.tokens_of(messages) + reserve)
         for attempt in range(3):
             started = self.clock()
             try:
@@ -582,12 +589,15 @@ class Engine:
                     status="retried" if retry else "failed",
                     error=str(exc),
                     mode=mode,
+                    step=step,
                 )
                 if not retry:
                     raise
                 self.sleep(RETRY_BACKOFF_S[attempt])
                 continue
-            self._record_model_call(inv, model, phase, duration_ms=reply.duration_ms, reply=reply, mode=mode)
+            self._record_model_call(
+                inv, model, phase, duration_ms=reply.duration_ms, reply=reply, mode=mode, step=step
+            )
             usage = inv.usage.model_copy(
                 update={
                     "model_calls": inv.usage.model_calls + 1,
@@ -596,7 +606,7 @@ class Engine:
                     "duration_ms": inv.usage.duration_ms + reply.duration_ms,
                 }
             )
-            inv = self._update(inv, usage=usage, model_name=model.name)
+            inv = self._update(inv, usage=usage, model_name=model.name, tool_mode=mode)
             self._emit(
                 "model_call",
                 {
@@ -610,6 +620,15 @@ class Engine:
             "the model failed", retryable=False
         )  # pragma: no cover - the loop raises or returns
 
+    def _note_over_limit(self, inv: Investigation, limit: int, tokens: int) -> Investigation:
+        """Said once: even with every older result compacted, a request is larger than the limit."""
+        start = f"the context limit ({limit} tokens) is smaller than a request"
+        fresh = self.store.get(Investigation, inv.id)
+        if any(lim.startswith(start) for lim in fresh.limitations):
+            return fresh
+        text = f"{start} even with older results compacted (about {tokens} tokens); the model was sent more"
+        return self._update(fresh, limitations=[*fresh.limitations, text])
+
     def _record_model_call(
         self,
         inv: Investigation,
@@ -621,6 +640,7 @@ class Engine:
         status: str = "ok",
         error: str | None = None,
         mode: str | None = None,
+        step: str | None = None,
     ) -> None:
         self.store.put(
             ModelCall(
@@ -634,6 +654,7 @@ class Engine:
                 status=cast(Any, status),
                 error=error,
                 mode=mode,
+                step=step,
             )
         )
 

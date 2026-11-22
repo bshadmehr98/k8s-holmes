@@ -84,14 +84,16 @@ def edit_model(api: Api, req: Request, params: dict[str, str]) -> Response:
     user = api.admin(req)
     endpoint = api.app.store.get(ModelEndpoint, params["id"])
     body = api.body(req)
-    if body.get("is_default"):
-        for other in api.app.store.find(ModelEndpoint, {"is_default": True}):
-            api.app.store.put(other.model_copy(update={"is_default": False}))
-        endpoint = endpoint.model_copy(update={"is_default": True})
+    changes = _sampling(body)
     if "limits" in body:
-        endpoint = endpoint.model_copy(update={"limits": ModelLimits.model_validate(body["limits"])})
-    endpoint = ModelEndpoint.model_validate({**endpoint.model_dump(), **_sampling(body)})
-    api.app.store.put(endpoint)
+        changes["limits"] = ModelLimits.model_validate(body["limits"]).model_dump()
+    endpoint = ModelEndpoint.model_validate({**endpoint.model_dump(), **changes})  # all checks first
+    with api.app.store.transaction():
+        if body.get("is_default"):
+            for other in api.app.store.find(ModelEndpoint, {"is_default": True}):
+                api.app.store.put(other.model_copy(update={"is_default": False}))
+            endpoint = endpoint.model_copy(update={"is_default": True})
+        api.app.store.put(endpoint)
     api.app.auth.audit(user.id, "model_endpoint_changed", subject=f"model:{endpoint.id}")
     return Response(200, {"endpoint": _endpoint_row(api, endpoint)})
 

@@ -3,8 +3,11 @@
 import json
 from typing import Any
 
+import pytest
+
 from k8sholmes.actions import choose_schema, ordered, structured_turn
 from k8sholmes.capabilities.builtin import builtin_registry
+from k8sholmes.errors import InvalidInput
 
 REGISTRY = builtin_registry(extensions=False)
 AVAILABLE = [REGISTRY.get(c) for c in ("k8s.get", "k8s.list", "k8s.events")]
@@ -69,8 +72,18 @@ def test_a_bad_choice_is_repaired_once_then_becomes_an_invalid_call() -> None:
     assert "capability must be one of" in asked[1][0][-1]["content"]
 
 
-def test_unparsable_inputs_after_the_repair_are_sent_empty_for_validation_to_refuse() -> None:
+def test_unparsable_inputs_after_the_repair_are_sent_for_validation_to_refuse() -> None:
     choice = json.dumps({"action": "call", "capability": "k8s.list", "why": ""})
     call, _, asked = turn([choice, "oops", "still not"])
-    assert call is not None and call.arguments == {}
+    assert call is not None and call.arguments == {"(not a JSON object)": "still not"}
     assert [step for _, _, step in asked] == ["choose", "fill", "fill"]
+    with pytest.raises(InvalidInput, match="- the inputs were not a JSON object"):
+        REGISTRY.validate(REGISTRY.get("k8s.list"), call.arguments)
+
+
+def test_an_empty_object_is_an_answer_for_a_capability_without_inputs() -> None:
+    ask, asked = asker([json.dumps({"action": "call", "capability": "k8s.permissions", "why": ""}), "{}"])
+    only = [REGISTRY.get("k8s.permissions")]
+    call, _ = structured_turn(ask, [], only, None, lambda c: [])
+    assert call is not None and call.arguments == {}
+    assert [step for _, _, step in asked] == ["choose", "fill"]  # no repair

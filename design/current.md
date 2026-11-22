@@ -287,8 +287,12 @@ ids with the framing's intended ones first, or `done`) and *fill* (that one capa
 own schema); code turns them into the same tool call, the result returns as a context message marked as
 data, and a reply that is not the object asked for gets one repair request, then becomes an invalid call.
 A structured step makes one call; `calls_per_step` applies to tool calls. With an endpoint's
-`context_tokens` set, the model sees the newest four results in full and older ones by their evidence id,
-status, summary and coverage until the estimate (characters ÷ 4) fits; the stored thread is unchanged.
+`context_tokens` set, every request (its tools and schema counted, the concluding one too) shows the
+newest four results in full and older ones by their evidence id, status, summary and coverage until the
+estimate (characters ÷ 4) fits; when even that is too large, the investigation says so once as a
+limitation. The stored thread is unchanged. Every model call records the endpoint's tool mode, and a
+structured gathering call its step (`choose` or `fill`); the investigation page shows the mode next to the
+model.
 Contradictions are the model's job to
 handle; the engine makes them visible by keeping every result, including the ones that contradict the
 framing's hypotheses.
