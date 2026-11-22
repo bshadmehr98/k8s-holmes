@@ -47,9 +47,10 @@ revised by the owner at any time:
 
 ## D-004: Repository URL  (2026-11-01)
 
-- **Choice:** `https://github.com/bshadmehr98/k8sholmes` in `pyproject.toml` and `@bshadmehr98` in
-  `CODEOWNERS` until the owner says where the project lives.
-- **Status:** awaiting owner review.
+- **Choice:** `https://github.com/bshadmehr98/k8s-holmes` in `pyproject.toml` (the repository the owner
+  created and pushed to) and `@bshadmehr98` in `CODEOWNERS`. The first guess, `.../k8sholmes`, did not
+  match the repository's name.
+- **Status:** settled by the owner's repository (2026-11-01).
 
 ## D-005: No GPU lock script  (2026-11-01)
 
