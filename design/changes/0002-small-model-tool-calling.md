@@ -136,8 +136,8 @@ step can also answer `done`, which ends gathering as an empty tool-call reply do
 ### 5. The names models expect
 
 An input model may declare aliases for a field (pydantic `validation_alias` with `AliasChoices`), and
-`kind` values are canonicalised through the kind table of `cluster.py` (`pod`, `pods`, `po`, `Pod` →
-`pods`; `svc` → `services`). The first aliases:
+`kind` values are canonicalised through the kind table of `cluster.py` (`pod`, `pods`, `po` → `Pod`;
+`svc` → `Service`; D-024). The first aliases:
 
 | Canonical | Also accepted |
 |---|---|
@@ -221,10 +221,11 @@ the rest, so it does not grow.
     capability; the investigation is `partial`, not `failed`; the investigation page, the report, the
     command line and the event stream show the notice of part 2 with the refused calls.
 28. **Known values.** The schema a model sees lists the inventory's namespaces within the allow-list and
-    the served kinds; a namespace outside the allow-list is refused by validation whatever the model
-    sends; the framing's intended capabilities are available ids.
-29. **Aliases are recorded.** `label_selector` and `kind: "pod"` are accepted and stored as `selector` and
-    `pods` with what was sent in `received`; an undeclared extra field is still refused (guarantee 2).
+    the served kinds; an unknown kind or namespace is refused by validation with a suggestion; a namespace
+    outside the allow-list is still refused by the gate; the framing's intended capabilities are
+    available ids.
+29. **Aliases are recorded.** `label_selector` and `kind: "po"` are accepted and stored as `selector` and
+    `Pod` with what was sent in `received`; an undeclared extra field is still refused (guarantee 2).
 30. **Playbooks run through the gate.** On the demo, "is anything unused?" runs the `unused` playbook; its
     calls are recorded with the playbook's id; a disabled capability in it is refused and becomes a
     limitation; the conclusion still states `cannot_answer` for traffic (guarantee 4).

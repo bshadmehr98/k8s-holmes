@@ -46,7 +46,7 @@ src/k8sholmes/
   records.py  store.py  auth.py    every record (pydantic); SQLite with a versioned schema; users, roles, sessions, audit
   environments.py  inventory.py  relationships.py   environments, the permission matrix, the inventory snapshot; what each kind keeps; relationships with their basis
   cluster.py                       the Cluster port, the kind table and the read-only kubectl adapter (recording too)
-  capabilities/                    the model, registry and gate (__init__); kubernetes, reviews, knowledge, probes; extensions; builtin
+  capabilities/                    the model, registry and gate (__init__); inputs (aliases, known values, teaching errors); kubernetes, reviews, knowledge, probes; extensions; builtin
   engine.py  prompts/              the investigation engine in five phases; the system prompt and the two output schemas
   evidence.py  findings.py         evidence with coverage, the redactor, caps; validating a conclusion, findings, states, revisions
   knowledge.py                     knowledge notes and exceptions: scope, exact matching, expiry, revocation, revisions

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import functools
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,7 @@ def _selector_text(selector: dict[str, str]) -> str:
 
 
 class InventoryInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespaces": "namespaces"}
     namespaces: list[str] = Field(
         default=[], description="Namespaces to list; empty means every namespace the permissions allow."
     )
@@ -81,6 +82,7 @@ def run_inventory(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class GetInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"kind": "kinds", "namespace": "namespaces"}
     kind: str = Field(
         description="Kind, singular or plural, as kubectl accepts it (pod, deployment, service, …)."
     )
@@ -109,6 +111,7 @@ def run_get(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class ListInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"kind": "kinds", "namespace": "namespaces"}
     kind: str
     namespace: str | None = Field(default=None, description="Omit for every namespace.")
     selector: str | None = Field(default=None, description="A label selector such as app=api,tier!=cache.")
@@ -144,6 +147,7 @@ def run_list(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class EventsInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"kind": "kinds", "namespace": "namespaces"}
     namespace: str | None = None
     kind: str | None = Field(default=None, description="With name: only events about this resource.")
     name: str | None = None
@@ -193,6 +197,7 @@ def run_events(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class LogsInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespace": "namespaces"}
     pod: str
     namespace: str
     container: str | None = None
@@ -229,6 +234,7 @@ def run_logs(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class WorkloadInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespace": "namespaces"}
     kind: str = Field(description="Deployment, StatefulSet, DaemonSet, Job, CronJob or Pod.")
     name: str
     namespace: str
@@ -327,6 +333,7 @@ def run_workload_health(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class ChangesInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespace": "namespaces"}
     namespace: str
     since_hours: float = Field(default=24, ge=0, le=24 * 90)
     name: str | None = Field(default=None, description="Only changes about resources with this name.")
@@ -471,6 +478,7 @@ def run_permissions(inputs: BaseModel, ctx: Context) -> Result:
 
 
 class TopInputs(Inputs):
+    known_fields: ClassVar[dict[str, str]] = {"namespace": "namespaces"}
     kind: str = Field(default="pods", description="pods or nodes")
     namespace: str | None = None
 

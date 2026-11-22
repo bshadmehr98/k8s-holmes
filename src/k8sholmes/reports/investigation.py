@@ -7,6 +7,7 @@ from typing import Any
 
 from k8sholmes.records import Call, Evidence, Finding, Investigation, Message, ModelCall, Report, Step
 from k8sholmes.reports.base import (
+    Section,
     call_rows,
     evidence_rows,
     finding_rows,
@@ -61,6 +62,14 @@ def _counts(
     }
 
 
+def _notices(inv: Investigation) -> list[Section]:
+    """What the user must see first (0002, part 2): one section, only when there is something to say."""
+    if not inv.notices:
+        return []
+    rows = [f"{n.text} Calls: {', '.join(n.call_ids)}." for n in inv.notices]
+    return [section("Notice", "list", rows, {"notices": len(inv.notices)})]
+
+
 def _model_call_rows(model_calls: list[ModelCall]) -> list[dict[str, Any]]:
     return [
         {
@@ -104,6 +113,7 @@ def investigation_report(store: Store, inv: Investigation, *, by: str) -> Report
         "top_finding": open_findings[0].title if open_findings else None,
     }
     sections = [
+        *_notices(inv),
         section("The question", "text", question),
         section("The answer", "text", answer),
         section(
@@ -176,6 +186,7 @@ def report_text(store: Store, inv: Investigation) -> str:
         subject_id=inv.id,
         generated_by="cli",
         sections=[
+            *_notices(inv),
             section("Status", "text", status),
             section("Answer", "text", {"answer": inv.answer or "No answer: see the limitations."}),
             section("Findings", "findings", finding_rows(findings, evidence), {"findings": len(findings)}),

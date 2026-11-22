@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from k8sholmes.app import App
-from k8sholmes.records import AuditEntry, Finding, Investigation
+from k8sholmes.records import AuditEntry, CapabilityTestResult, Finding, Investigation, ModelEndpoint
 from k8sholmes.server import serve_in_thread
-from tests.helpers import Client
+from tests.helpers import Client, closed_port
 
 
 def raw_post(base: str, body: bytes) -> tuple[int, bytes]:
@@ -230,6 +230,28 @@ def test_investigation_control_routes_and_request_parsing(tmp_path: Path) -> Non
         while time.monotonic() < deadline and client.ok("GET", f"/api/investigations/{inv['id']}")["running"]:
             time.sleep(0.05)
         findings = client.ok("GET", f"/api/investigations/{inv['id']}")["findings"]
+        # resume with another model (0002, part 2): only an endpoint that passed the tool-calling test
+        untested = ModelEndpoint(name="u", base_url="http://127.0.0.1:1/v1", model="m")
+        usable = ModelEndpoint(
+            name="other",
+            base_url=f"http://127.0.0.1:{closed_port()}/v1",
+            model="m",
+            tests={"tool_calling": CapabilityTestResult(status="passed")},
+        )
+        app.store.put(untested)
+        app.store.put(usable)
+        app.store.put(app.store.get(Investigation, inv["id"]).model_copy(update={"status": "partial"}))
+        status, payload = client.call(
+            "POST", f"/api/investigations/{inv['id']}/resume", {"model_endpoint_id": untested.id}
+        )
+        assert status == 400 and "has not been tested" in payload["error"]
+        assert app.store.get(Investigation, inv["id"]).model_endpoint_id != untested.id
+        changed = client.ok(
+            "POST", f"/api/investigations/{inv['id']}/resume", {"model_endpoint_id": usable.id}
+        )
+        assert changed["investigation"]["model_endpoint_id"] == usable.id
+        client.wait_idle(inv["id"])
+        assert any(a.action == "investigation_model_changed" for a in app.store.find(AuditEntry))
         multi = Finding(
             investigation_id=inv["id"],
             environment_id=env.id,

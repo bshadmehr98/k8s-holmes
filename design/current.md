@@ -89,6 +89,7 @@ src/k8sholmes/
   cluster.py            the Cluster port, the kind table and the kubectl adapter (read-only verbs; §5.3)
   capabilities/         the capability model, the registry and the gate (§5)
     __init__.py         Capability, Context, Inputs, Result handling, the registry, validation, the gate
+    inputs.py           aliases, the environment's known kinds and namespaces, errors that teach (0002)
     kubernetes.py       the inspect capabilities that read one thing (inventory, get, list, events, logs, health, changes …)
     reviews.py          the review capabilities (network exposure, service backends, safeguards, alert rules)
     knowledge.py        knowledge and exceptions in scope, evidence of earlier investigations (§5.3)
@@ -184,7 +185,14 @@ Result
 ```
 
 Rules: inputs are validated before anything runs, and a validation error is returned to the model as a
-tool error with the field named; a capability never prompts, never reads credentials, never shells out
+tool error with the field named, the accepted fields listed and the closest field or value suggested, in
+plain text (change 0002). The names models expect are accepted for a few fields (`label_selector` and
+`labels` for `selector`, `ns` for `namespace`, `resource_name` for `name`) and kinds by any of kubectl's
+names (`po`, `pods`, `Pod`); the call keeps the canonical inputs and, when they differ, what the model
+sent. A `kind` or `namespace` field is checked against the environment: the kinds the cluster serves (from
+connecting) and the namespaces of the latest inventory of every namespace; the schema the model sees lists
+them as allowed values, within the capability's namespace allow-list, up to 200 namespaces. The allowed
+values help the model; the gate stays the registry's. a capability never prompts, never reads credentials, never shells out
 except through the `Cluster` port; `run` is deterministic for the same cluster state; `data` is JSON that
 reads on its own (no references to in-memory objects).
 
@@ -266,7 +274,10 @@ and exceptions in scope marked as such, and the thread so far. It calls tools; t
 inputs, asks the gate, runs the capability, records the call and its evidence, and returns the result's
 summary and data (capped) as the tool message. Budgets are settings per investigation: steps (default
 24), calls per step (8), tokens, wall time. When a budget ends, the loop stops and the investigation
-concludes with what it has, marked `partial` with the reason. Contradictions are the model's job to
+concludes with what it has, marked `partial` with the reason. Three invalid calls in a row also end
+gathering (change 0002): the investigation gets a **notice** saying plainly why it stopped and which calls
+were refused, a limitation, and concludes `partial`; a resume starts a fresh count. The framing's intended
+capabilities are limited to the available ids. Contradictions are the model's job to
 handle; the engine makes them visible by keeping every result, including the ones that contradict the
 framing's hypotheses.
 
@@ -510,7 +521,8 @@ failed cannot be chosen for investigations.
 Every investigation shows its endpoint and model, and its usage (calls, tokens, duration, price when
 known). Every model call is logged with the endpoint id. If an endpoint fails, the investigation fails or
 pauses with the error; it never retries on another endpoint. Changing an investigation's model is a user
-action recorded in the thread.
+action recorded in the thread and the audit log: resuming with another endpoint that passed the
+tool-calling test.
 
 ### 13.4 Comparing models
 
@@ -574,7 +586,10 @@ line; the most useful finding or answer; the next meaningful action (resume, acc
 Tabs below: **Findings** (by kind and state, accepted ones folded), **Activity** (steps and calls, each
 opening to parameters, result, duration, error), **Evidence** (every record with its coverage and
 redactions), **Report**, **History** (revisions, the thread). An inspector on the right opens a selected
-finding, call or evidence without leaving the page. Live updates arrive as server-sent events.
+finding, call or evidence without leaving the page. Live updates arrive as server-sent events. A notice
+(why gathering stopped) comes before the answer, with the refused calls, what the model sent and why each
+was refused, and **Resume with this model** for another usable endpoint; reports carry it as their first
+section.
 
 ### 15.3 States and accessibility
 
@@ -732,6 +747,20 @@ is removed.
     never anything referenced by a reviewed finding, an exception, a report revision or a saved run; the
     audit log says what it removed.
 
+Added by [change 0002](changes/0002-small-model-tool-calling.md):
+
+26. **Errors teach.** An invalid call's tool message names the field, lists the accepted fields and
+    suggests the closest field or known value; it is plain text.
+27. **A stuck model stops.** Three consecutive invalid calls end gathering with a limitation naming the
+    capability; the investigation is `partial`, not `failed`; the investigation page, the report, the
+    command line and the event stream show the notice with the refused calls.
+28. **Known values.** The schema a model sees lists the inventory's namespaces within the allow-list and
+    the served kinds; an unknown kind or namespace is refused by validation with a suggestion; a namespace
+    outside the allow-list is still refused by the gate; the framing's intended capabilities are
+    available ids.
+29. **Aliases are recorded.** `label_selector` and `kind: "po"` are accepted and stored as `selector` and
+    `Pod` with what was sent in `received`; an undeclared extra field is still refused (guarantee 2).
+
 ## 19. Implemented and planned
 
 Updated as milestones land.
@@ -782,7 +811,16 @@ all executed by the default suite. Guarantees 1 to 24 are tested on the recordin
 the five scenarios and the Secret check on a real cluster, by hand (first run on kind v0.29.0,
 Kubernetes 1.33.1, 2026-11-02: 6 passed).
 
-**Planned:** nothing before 0.1.0 is released; what comes after is a new change record.
+**Implemented (change 0002, piece A, 2026-11-22):** inputs a model can get right: teaching validation
+errors in plain text, the stop after three invalid calls with its notice on the page, in reports, on the
+command line and in the event stream, the kinds and namespaces of the environment as allowed values and
+checked by validation, accepted field aliases and kind names with what the model sent kept, the framing's
+intended capabilities limited to the catalog, resuming with another model (§5.1, §6.2, §13.3, §15.2).
+Guarantees 26 to 29 are tested.
+
+**Planned:** change 0002 pieces B (the structured tool mode, fewer choices per decision, a bounded
+context and a set temperature; guarantees 25 and 31) and C (playbooks; guarantee 30); anything else is a
+new change record.
 
 ## 20. Known limits (0.1)
 

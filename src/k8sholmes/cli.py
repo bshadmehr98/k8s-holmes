@@ -167,9 +167,11 @@ def _print_event(kind: str, payload: dict[str, Any]) -> None:
         call = payload["call"]
         print(
             f"    {call['capability_id']} -> {call['status']}"
-            + (f" ({call['reason'][:80]})" if call["reason"] else ""),
+            + (f" ({' '.join(call['reason'].split())[:120]})" if call["reason"] else ""),
             file=sys.stderr,
         )
+    elif kind == "stopped_invalid":
+        print(f"  NOTICE: {payload['notice']['text']}", file=sys.stderr)
 
 
 def _demo(app: App, args: argparse.Namespace) -> int:

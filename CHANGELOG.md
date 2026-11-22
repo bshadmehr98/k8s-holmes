@@ -24,6 +24,13 @@ design changed is in [`design/changes/`](design/changes/).
 
 ### Added
 
+- **Inputs a model can get right** ([0002](design/changes/0002-small-model-tool-calling.md), piece A).
+  An invalid capability call is answered in plain text with the field, the accepted fields and the closest
+  field or value; `label_selector`, `ns` and kubectl's kind names are accepted, and the call keeps what the
+  model sent; the kinds the cluster serves and the inventory's namespaces are offered to the model as
+  allowed values and checked; three invalid calls in a row stop gathering with a notice on the page, in
+  reports, on the command line and in the event stream; an investigation can be resumed with another
+  model. Found when `gpt-oss:20b` spent 12 of 19 calls on refused inputs on a real cluster.
 - **Milestone 4: real clusters and documentation** ([0001](design/changes/0001-initial-design.md)). The
   cluster suite reproduces the demo shop on a throwaway kind or minikube cluster and runs the five
   scenarios against it (`uv run pytest -m cluster`); the hosted test runs one real OpenAI-compatible

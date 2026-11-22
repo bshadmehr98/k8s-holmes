@@ -101,6 +101,7 @@ class Environment(Record):
     permissions: dict[str, bool] = {}  # "verb kind" -> allowed, from the last connection check (design §4.1)
     connected_at: datetime | None = None
     server_version: str | None = None
+    kinds: list[str] = []  # the resource names the cluster serves (api-resources), from the last connection
 
 
 class Relationship(Record):
@@ -200,6 +201,14 @@ class Framing(Record):
     intended_capabilities: list[str] = []
 
 
+class Notice(Record):
+    """Something the user must see at the top of an investigation and its report (change 0002, part 2)."""
+
+    kind: Literal["stopped_invalid"]
+    text: str
+    call_ids: list[str] = []
+
+
 class Investigation(Record):
     id: str = Field(default_factory=lambda: new_id("inv"))
     environment_id: str
@@ -221,6 +230,7 @@ class Investigation(Record):
     saved_id: str | None = None
     usage: Usage = Field(default_factory=Usage)
     answer: str | None = None  # the one-paragraph answer shown first (design §15.2)
+    notices: list[Notice] = []  # what the user must see first, such as why gathering stopped (0002)
 
 
 class ToolCall(Record):
@@ -260,7 +270,8 @@ class Call(Record):
     investigation_id: str
     step_id: str
     capability_id: str
-    inputs: dict[str, Any] = {}
+    inputs: dict[str, Any] = {}  # canonical: aliases resolved, kinds canonical (0002, part 5)
+    received: dict[str, Any] | None = None  # what the model sent, when it differs from `inputs`
     status: Literal["completed", "refused", "failed", "invalid"]
     reason: str = ""  # the refusal, the validation error or the failure
     duration_ms: int = 0

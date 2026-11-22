@@ -116,6 +116,10 @@ def resume(api: Api, req: Request, params: dict[str, str]) -> Response:
         raise InvestigationStateError(
             f"investigation {inv.id} is {inv.status}; only {', '.join(RESUMABLE)} resume"
         )
+    endpoint_id = (req.body or {}).get("model_endpoint_id")
+    if endpoint_id:  # "Change model" on the notice of 0002: another endpoint for the rest of the run
+        api.app.model_for(str(endpoint_id))  # raises unless it exists and passed the tool-calling test
+        inv = api.app.engine.change_model(inv.id, user, str(endpoint_id))
     api.app.auth.audit(
         user.id,
         "investigation_resume_requested",
