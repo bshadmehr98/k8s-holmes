@@ -268,7 +268,7 @@ The brief's seven steps map to five phases, each persisted as it completes:
 |---|---|---|
 | **framing** | model, structured | from the question, the environment and the user's scope: the question restated, the scope (namespaces, resources), the time period, the initial hypotheses, the capabilities it intends to use |
 | **discovery** | code | the permission matrix, the available capabilities with their coverage promises, the knowledge and exceptions whose scope touches the framing, the latest inventory snapshot (made if stale) |
-| **gathering** | model and code | the playbook the framing named, if any, run once by code through the gate; then the tool-calling loop (§6.2) |
+| **gathering** | model and code | the playbook the framing named, if any, run once by code through the gate as one step (cancel and budgets checked before each call; never repeated on resume); then the tool-calling loop (§6.2) |
 | **concluding** | model, structured, then code | findings, limitations, next steps, the knowledge used; then validation (§6.3), exception matching (§9.1) and de-duplication (§8.3) |
 | **follow-up** | user, then model | a message, more context or a requested check starts another gathering and concluding round; the earlier findings are revised, never silently replaced (§8.4) |
 

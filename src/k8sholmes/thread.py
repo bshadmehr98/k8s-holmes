@@ -74,6 +74,11 @@ def framing_prompt(inv: Investigation) -> list[dict[str, Any]]:
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
 
+def _playbook_of(value: Any) -> str | None:
+    """A playbook id the model named, or None: anything else, of any shape, means none."""
+    return value if isinstance(value, str) and value in PLAYBOOKS else None
+
+
 def framing_from(payload: dict[str, Any], inv: Investigation) -> Framing:
     """The model's framing reply as a record; the user's scope and period win where the reply is silent."""
     hours = float(payload.get("period_hours") or 24)
@@ -98,7 +103,7 @@ def framing_from(payload: dict[str, Any], inv: Investigation) -> Framing:
         period=period,
         hypotheses=[str(h) for h in cast(list[Any], payload.get("hypotheses") or [])],
         intended_capabilities=[str(c) for c in cast(list[Any], payload.get("intended_capabilities") or [])],
-        playbook=str(payload["playbook"]) if payload.get("playbook") in PLAYBOOKS else None,
+        playbook=_playbook_of(payload.get("playbook")),
     )
 
 

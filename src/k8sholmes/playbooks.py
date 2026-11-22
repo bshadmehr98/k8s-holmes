@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from k8sholmes.capabilities.kubernetes import CHANGES_MAX_HOURS, EVENTS_MAX_HOURS
 from k8sholmes.inventory import WORKLOAD_KINDS
 from k8sholmes.records import Framing, Inventory
 
@@ -24,6 +25,9 @@ Plan = list[tuple[str, dict[str, Any]]]
 
 @dataclass(frozen=True)
 class Playbook:
+    """A fixed set of capability calls for a common question shape; `plan` makes them from the framing
+    and the latest inventory."""
+
     id: str  # stable, like a capability id
     title: str
     plan: Callable[[Framing, Inventory | None], Plan]
@@ -40,47 +44,44 @@ def _namespaces(framing: Framing, inventory: Inventory | None) -> list[str]:
 
 def _unused(framing: Framing, inventory: Inventory | None) -> Plan:
     scope = list(framing.scope.namespaces)
+    # the inventory's relationships show which pods use each ConfigMap and PVC
     plan: Plan = [("k8s.inventory", {"namespaces": scope})]
+    for kind in ("Deployment", "StatefulSet", "PersistentVolumeClaim"):
+        plan += [("k8s.list", {"kind": kind, "namespace": ns}) for ns in scope or [None]]
     services = [i.ref for i in (inventory.items if inventory else []) if i.ref.kind == "Service"]
-    plan += [
+    plan += [  # last, so a cut keeps the fixed checks
         ("k8s.service_backends", {"name": s.name, "namespace": s.namespace})
         for s in services
         if s.namespace and (not scope or s.namespace in scope)
     ]
-    for kind in ("Deployment", "StatefulSet", "PersistentVolumeClaim"):
-        plan += [("k8s.list", {"kind": kind, "namespace": ns}) for ns in scope or [None]]
     return plan
 
 
+def _recent(framing: Framing, inventory: Inventory | None) -> Plan:
+    """Changes and events in each namespace for the framing's period."""
+    hours = _hours(framing)
+    return [
+        call
+        for ns in _namespaces(framing, inventory)
+        for call in (
+            ("k8s.changes", {"namespace": ns, "since_hours": min(hours, CHANGES_MAX_HOURS)}),
+            ("k8s.events", {"namespace": ns, "since_hours": min(hours, EVENTS_MAX_HOURS)}),
+        )
+    ]
+
+
 def _restarts(framing: Framing, inventory: Inventory | None) -> Plan:
-    plan: Plan = [
+    health: Plan = [
         ("k8s.workload_health", {"kind": r.kind, "name": r.name, "namespace": r.namespace})
         for r in framing.scope.resources
         if r.kind in WORKLOAD_KINDS | {"Pod"} and r.namespace
     ]
-    hours = _hours(framing)
-    for ns in _namespaces(framing, inventory):
-        plan += [
-            ("k8s.events", {"namespace": ns, "since_hours": min(hours, 24 * 30)}),
-            ("k8s.changes", {"namespace": ns, "since_hours": min(hours, 24 * 90)}),
-        ]
-    return plan
+    return health + _recent(framing, inventory)
 
 
 def _exposure(framing: Framing, inventory: Inventory | None) -> Plan:
     scope = list(framing.scope.namespaces)
     return [("k8s.network_exposure", {"namespaces": scope}), ("k8s.safeguards", {"namespaces": scope})]
-
-
-def _what_changed(framing: Framing, inventory: Inventory | None) -> Plan:
-    hours = _hours(framing)
-    plan: Plan = []
-    for ns in _namespaces(framing, inventory):
-        plan += [
-            ("k8s.changes", {"namespace": ns, "since_hours": min(hours, 24 * 90)}),
-            ("k8s.events", {"namespace": ns, "since_hours": min(hours, 24 * 30)}),
-        ]
-    return plan
 
 
 def _hours(framing: Framing) -> float:
@@ -108,13 +109,13 @@ PLAYBOOKS: dict[str, Playbook] = {
             "exposure",
             "What is exposed",
             _exposure,
-            needs="network",
+            needs="cloud-network",  # no built-in capability reaches beyond the cluster
             limitation=(
                 "beyond the cluster (cloud firewalls, a service mesh): cannot be answered from Kubernetes "
                 "alone (cannot_answer)"
             ),
         ),
-        Playbook("what_changed", "What changed", _what_changed),
+        Playbook("what_changed", "What changed", _recent),
     )
 }
 

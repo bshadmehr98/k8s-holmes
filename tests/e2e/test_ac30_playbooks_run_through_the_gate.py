@@ -99,3 +99,90 @@ def test_none_runs_no_playbook_and_structured_mode_sees_results_as_data(demo: De
         if m.author.startswith("capability:")
     ]
     assert results and all(m.role == "user" and m.content.startswith("Result of") for m in results)
+
+
+def test_an_interrupted_playbook_is_not_repeated_on_resume(demo: Demo) -> None:
+    import pytest
+
+    scripted(demo, "unused")
+    engine = demo.app.engine
+    real = engine.registry.execute
+    count = {"n": 0}
+
+    def dies(*args, **kwargs):
+        count["n"] += 1
+        if count["n"] == 4:  # discovery's inventory, then two playbook calls, then the process dies
+            raise RuntimeError("process died")
+        return real(*args, **kwargs)
+
+    engine.registry.execute = dies
+    inv = engine.start(environment=demo.env, question="Is anything unused?", user=demo.user)
+    with pytest.raises(RuntimeError):
+        engine.run(inv.id, demo.user)
+    engine.registry.execute = real
+    before = len(by_playbook(demo, inv.id))
+    resumed = engine.resume(inv.id, demo.user)
+    assert len(by_playbook(demo, inv.id)) == before == 2  # nothing repeated
+    assert resumed.status in ("completed", "partial")
+
+
+def test_cancel_and_budgets_stop_a_playbook_between_calls(demo: Demo) -> None:
+    from k8sholmes.records import Budgets
+
+    scripted(demo, "unused")
+    engine = demo.app.engine
+    real = engine.registry.execute
+    state: dict = {}
+
+    def cancels(*args, **kwargs):
+        result = real(*args, **kwargs)
+        if args[0] == "k8s.list" and "inv" in state:
+            engine.cancel(state["inv"], demo.user)
+        return result
+
+    engine.registry.execute = cancels
+    inv = engine.start(environment=demo.env, question="Is anything unused?", user=demo.user)
+    state["inv"] = inv.id
+    inv = engine.run(inv.id, demo.user)
+    engine.registry.execute = real
+    assert inv.status == "cancelled"
+    assert [c.capability_id for c in by_playbook(demo, inv.id)] == ["k8s.inventory", "k8s.list"]
+    scripted(demo, "unused")
+    tight = engine.start(environment=demo.env, question="q", user=demo.user, budgets=Budgets(steps=2))
+    tight = engine.run(tight.id, demo.user)
+    assert not by_playbook(demo, tight.id)  # the step budget was spent before its first call
+    assert any("step budget (2)" in lim for lim in tight.limitations)
+
+
+def test_the_model_sees_the_playbook_results_and_its_limitation_follows_the_sources(demo: Demo) -> None:
+    from k8sholmes.capabilities import Capability
+    from k8sholmes.capabilities.kubernetes import NoInputs
+    from k8sholmes.environments import latest_inventory
+    from k8sholmes.evidence import Result
+
+    model = scripted(demo, "unused")
+    inv = demo.ask("Is anything unused?")
+    latest = latest_inventory(demo.app.store, demo.env.id)
+    assert latest is not None
+    shop_services = sorted(
+        i.ref.name for i in latest.items if i.ref.kind == "Service" and i.ref.namespace == "shop"
+    )
+    ran = by_playbook(demo, inv.id)
+    assert sorted(c.inputs["name"] for c in ran if c.capability_id == "k8s.service_backends") == shop_services
+    first = next(r for r in model.requests if r["tools"])["messages"]
+    assert any(m["role"] == "assistant" and "Playbook unused" in str(m["content"]) for m in first)
+    assert sum(m["role"] == "tool" for m in first) == len(ran)
+    traffic = Capability(
+        id="mesh.requests",
+        title="Requests",
+        purpose="Requests between services.",
+        class_="inspect",
+        systems=("traffic",),
+        inputs=NoInputs,
+        permissions=(),
+        run=lambda i, c: Result(summary="none", data={}, coverage="observed"),
+    )
+    demo.app.engine.registry.add(traffic)
+    scripted(demo, "unused")
+    with_source = demo.ask("Is anything unused?")
+    assert not any(lim.startswith("traffic: no connected source") for lim in with_source.limitations)
