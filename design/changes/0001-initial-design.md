@@ -2,7 +2,8 @@
 
 ## Status
 
-`accepted 2026-11-01 by the owner` (the brief, [history/0001-owner-brief.md](../history/0001-owner-brief.md):
+`accepted 2026-11-01 by the owner`; all four milestones built 2026-11-01, the record becomes
+`implemented in 0.1.0` when the maintainer releases (the brief, [history/0001-owner-brief.md](../history/0001-owner-brief.md):
 "Build **K8sHolmes**, an open-source, self-hosted infrastructure investigation platform implemented in
 **Python**"). The first version of this record, written the same morning from the project's name alone,
 proposed a smaller command-line investigator; the owner's brief replaced it, and this record was rewritten

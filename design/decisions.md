@@ -197,3 +197,25 @@ revised by the owner at any time:
 - **Why:** each keeps the guarantee (24, 18, 13, 21) with the least machinery; (b) in particular refuses
   to let a model or a heuristic declare a fix verified.
 - **Status:** designer's choice from milestone 3; awaiting owner review.
+
+## D-022: A kind the cluster does not serve is not a refused permission  (2026-11-01)
+
+- **Choice:** connecting leaves out of the permission matrix every checked kind the cluster does not serve
+  (a CRD that is not installed, such as `prometheusrules` or `servicemonitors`), instead of recording it
+  as `false`. The gate refuses only on `false`, so the capability runs and states `cannot_answer` itself.
+  `k8s.permissions` still reports the absence, as `not_served` (checked on connect, not in the matrix).
+- **Why:** §5.1 says `k8s.alert_rules` is `cannot_answer` when the CRDs are absent, and the reliability
+  review counts on that coverage; recording the absence as a refusal made that branch unreachable, and a
+  cluster with PrometheusRule but no ServiceMonitor CRD refused the capability outright. Found by the
+  review of milestone 4.
+- **Status:** designer's choice; awaiting owner review.
+
+## D-023: The capability tests leave room for thinking  (2026-11-01)
+
+- **Choice:** the capability tests that read the reply (model, tool calling, streaming, structured) ask
+  for at most 1024 tokens (`models.ANSWER_BUDGET`); connectivity and authentication keep 5 tokens (they
+  only need an answer), limits keeps 16 (it checks the cap).
+- **Why:** reasoning models spend tokens thinking before they write content; with 8 to 64 tokens qwen3:8b
+  on Ollama returned empty content and failed `model`, `tool_calling` and `structured`, though it does all
+  three. The budget is a ceiling: a model that answers at once still uses a few tokens.
+- **Status:** designer's choice from the hosted test; awaiting owner review.

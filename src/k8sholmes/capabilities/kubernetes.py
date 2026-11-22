@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from k8sholmes.capabilities import Capability, Context, Inputs
 from k8sholmes.cluster import canonical_kind
-from k8sholmes.environments import take_inventory
+from k8sholmes.environments import PERMISSION_CHECKS, take_inventory
 from k8sholmes.errors import NotFound
 from k8sholmes.evidence import Result
 from k8sholmes.inventory import WORKLOAD_KINDS, InventoryItem, dig, item_of, parse_time
@@ -456,12 +456,16 @@ def run_permissions(inputs: BaseModel, ctx: Context) -> Result:
     matrix = ctx.environment.permissions
     denied = sorted(k for k, v in matrix.items() if not v)
     checked = ctx.environment.connected_at.isoformat() if ctx.environment.connected_at else None
-    summary = f"{len(matrix) - len(denied)} of {len(matrix)} permissions allowed" + (
-        f"; denied: {', '.join(denied)}" if denied else ""
+    # checked on connect but absent from the matrix: the cluster does not serve the kind (D-022)
+    not_served = sorted({f"{v} {k}" for v, k in PERMISSION_CHECKS} - set(matrix)) if checked else []
+    summary = (
+        f"{len(matrix) - len(denied)} of {len(matrix)} permissions allowed"
+        + (f"; denied: {', '.join(denied)}" if denied else "")
+        + (f"; not served: {', '.join(not_served)}" if not_served else "")
     )
     return Result(
         summary=summary,
-        data={"permissions": matrix, "denied": denied, "checked_at": checked},
+        data={"permissions": matrix, "denied": denied, "not_served": not_served, "checked_at": checked},
         coverage="observed",
     )
 

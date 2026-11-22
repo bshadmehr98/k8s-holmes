@@ -331,6 +331,11 @@ _SCHEMA = {
 }
 
 
+# reasoning models (qwen3, deepseek-r1, gpt-oss) spend tokens thinking before they answer; a test that
+# reads the answer gives them room, so a short budget never reads as a failure (D-023)
+ANSWER_BUDGET = 1024
+
+
 def _test_connectivity(model: OpenAICompatible) -> tuple[str, str]:
     try:
         models = model.list_models()
@@ -353,13 +358,17 @@ def _test_authentication(model: OpenAICompatible) -> tuple[str, str]:
 
 
 def _test_model(model: OpenAICompatible) -> tuple[str, str]:
-    reply = model.complete([{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=8)
+    reply = model.complete(
+        [{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=ANSWER_BUDGET
+    )
     return ("passed" if reply.content.strip() else "failed"), f"reply: {reply.content.strip()[:80]!r}"
 
 
 def _test_tool_calling(model: OpenAICompatible) -> tuple[str, str]:
     reply = model.complete(
-        [{"role": "user", "content": "What time is it in Paris? Use the tool."}], tools=[_TOOL], max_tokens=64
+        [{"role": "user", "content": "What time is it in Paris? Use the tool."}],
+        tools=[_TOOL],
+        max_tokens=ANSWER_BUDGET,
     )
     if not reply.tool_calls:
         return "failed", f"the model answered in text instead of calling the tool: {reply.content[:200]!r}"
@@ -373,7 +382,7 @@ def _test_streaming(model: OpenAICompatible) -> tuple[str, str]:
     chunks: list[str] = []
     reply = model.complete(
         [{"role": "user", "content": "Count from one to five in words."}],
-        max_tokens=40,
+        max_tokens=ANSWER_BUDGET,
         stream=True,
         on_delta=chunks.append,
     )
@@ -386,7 +395,7 @@ def _test_structured(model: OpenAICompatible) -> tuple[str, str]:
     reply = model.complete(
         [{"role": "user", "content": "What is 6 times 7? Answer as JSON with the integer field answer."}],
         schema=_SCHEMA,
-        max_tokens=40,
+        max_tokens=ANSWER_BUDGET,
     )
     try:
         payload = json.loads(reply.content)

@@ -18,10 +18,11 @@ check and its §19 says what is built. Why the design looks like this: the owner
 
 **Status:** design 0001 is accepted (2026-11-01, from the owner's brief) and being built in milestones
 M1 to M4 (the table in [design/changes/0001-initial-design.md](design/changes/0001-initial-design.md)).
-Milestones 1 (the engine on records, the capabilities, the models, the demo and the command line), 2 (the
-web interface and the API) and 3 (reports, proposals and verification, saved and recurring investigations,
-retention) are built; `design/current.md` §19 lists what that covers. Do not implement anything the design
-does not say; a gap becomes a `D-` entry or a proposed change record.
+All four milestones are built: 1 (the engine on records, the capabilities, the models, the demo and the
+command line), 2 (the web interface and the API), 3 (reports, proposals and verification, saved and
+recurring investigations, retention) and 4 (the cluster and hosted suites, the documentation, the
+examples); `design/current.md` §19 lists what that covers; 0.1.0 is not released. Do not implement
+anything the design does not say; a gap becomes a `D-` entry or a proposed change record.
 
 ## Commands
 
@@ -57,9 +58,9 @@ src/k8sholmes/
   proposals.py  saved.py  scheduler.py  retention.py   proposals and verification by code; saved investigations, comparison by key, notifications; the server's scheduler thread; the retention purge
   page/                            the interface: index.html, tokens.css, app.css, app.js and views/*.js; no build step
   testing/                         FakeCluster, RecordedCluster, ScriptedModel, the contract checker, the demo cluster and the demo model
-tests/unit|contract|integration|e2e   default suite; tests/cluster|hosted: by hand, marked
+tests/unit|contract|integration|e2e   default suite; tests/cluster (manifests of the demo shop, a throwaway kind or minikube) and tests/hosted (one real model): by hand, marked
 design/                why and how: README, current.md, changes/, decisions.md, history/
-docs/  examples/       user docs and runnable examples, both executed by tests once they exist
+docs/  examples/       user docs (every Python block runs in the tests) and runnable examples (tests/e2e/test_examples.py)
 ```
 
 ## Rules

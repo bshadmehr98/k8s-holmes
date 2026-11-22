@@ -6,12 +6,31 @@ design changed is in [`design/changes/`](design/changes/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `k8s.alert_rules` on a cluster without the PrometheusRule CRD states `cannot_answer`, as design §5.1
+  says, instead of being refused by the gate: connecting leaves a kind the cluster does not serve out of
+  the permission matrix (D-022).
+- The model capability tests give a reasoning model (qwen3, deepseek-r1, gpt-oss) 1024 tokens to answer,
+  so its thinking no longer reads as an empty reply and a false `failed` (D-023; found with qwen3:8b).
+- A result too large for a model message keeps its shape: the largest value is cut (the head of a long
+  list stays readable) instead of being replaced whole, and cutting always ends; before, a dict of many
+  medium values could loop forever, and a Deployment mid-rollout on a real cluster reached the model
+  with its pods list omitted. Found by the first run of the cluster suite.
+
 ### Removed
 
 - The error `InvalidCase` of the unreleased skeleton (there are no case files in the accepted design).
 
 ### Added
 
+- **Milestone 4: real clusters and documentation** ([0001](design/changes/0001-initial-design.md)). The
+  cluster suite reproduces the demo shop on a throwaway kind or minikube cluster and runs the five
+  scenarios against it (`uv run pytest -m cluster`); the hosted test runs one real OpenAI-compatible
+  endpoint through the capability tests (`-m hosted`); both skip with a reason when their prerequisites
+  are missing. User documentation for the command line, setup, capabilities, extensions, records and
+  exports, privacy and the demo; four runnable examples under `examples/`, executed by the tests, the
+  quickstart against the built wheel alone.
 - **Milestone 3: reports and follow-through** ([0001](design/changes/0001-initial-design.md)). Reports are
   built by code from stored records: the live summary, the investigation report, the incident review, the
   reliability and monitoring review and the comparison of two runs; every number is a count of the records

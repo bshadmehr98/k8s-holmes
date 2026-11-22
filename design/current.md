@@ -127,7 +127,9 @@ An environment is created with a name and a kubeconfig context (the kubeconfig p
 and the permission matrix: `auth can-i` for every verb and kind the built-in capabilities use, per
 namespace scope. The matrix is evidence (coverage `observed`) and decides which capabilities are
 **available** in that environment; a capability whose permissions are missing is shown as unavailable
-with the missing verbs, never silently skipped.
+with the missing verbs, never silently skipped. A kind the cluster does not serve (a CRD that is not
+installed) is left out of the matrix: nothing is refused, and the capability that reads it states
+`cannot_answer` itself (D-022).
 
 ### 4.2 Inventory
 
@@ -770,7 +772,17 @@ endpoint); the retention purge from the scheduler thread, never touching pinned 
 the Reports page, the Report and Proposals tabs, saved investigations under Investigations (§15).
 Guarantees 11, 12, 13, 18 and 24 are tested.
 
-**Planned:** the real-cluster suite, the hosted model test and the user documentation (milestone 4).
+**Implemented (milestone 4, 2026-11-01):** the cluster suite (`tests/cluster/`, marker `cluster`): the
+demo shop as manifests applied once to a namespace `shop` of a throwaway kind or minikube cluster, the five
+scenarios of §17.2 asserted on coverage, condition codes and citations, a planted Secret that never reaches
+evidence, recording with `K8SHOLMES_RECORD_TO`; the hosted test (`tests/hosted/`, marker `hosted`): one
+real OpenAI-compatible endpoint through the capability tests of §13.2; the user documentation (setup, the
+command line, capabilities, extensions, records and exports, privacy, the demo) and four runnable examples,
+all executed by the default suite. Guarantees 1 to 24 are tested on the recording; the cluster suite runs
+the five scenarios and the Secret check on a real cluster, by hand (first run on kind v0.29.0,
+Kubernetes 1.33.1, 2026-11-02: 6 passed).
+
+**Planned:** nothing before 0.1.0 is released; what comes after is a new change record.
 
 ## 20. Known limits (0.1)
 

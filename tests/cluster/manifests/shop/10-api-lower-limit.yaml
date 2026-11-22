@@ -1,0 +1,26 @@
+# Applied after 00-workloads.yaml: a second revision of api with a lower limit, so `k8s.changes` sees a
+# rollout with its change cause before the restarts (scenarios 1 and 5).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels: {app: api}
+  annotations:
+    kubernetes.io/change-cause: "lower the memory limit to 40Mi"
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: api}
+  template:
+    metadata:
+      labels: {app: api}
+    spec:
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-c", "x = bytearray(200 * 1024 * 1024); import time; time.sleep(3600)"]
+          resources:
+            requests: {memory: 32Mi, cpu: 10m}
+            limits: {memory: 40Mi, cpu: 200m}
+          ports:
+            - containerPort: 8080
