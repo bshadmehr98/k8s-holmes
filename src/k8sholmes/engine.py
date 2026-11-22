@@ -17,9 +17,10 @@ from k8sholmes.auth import Auth
 from k8sholmes.capabilities import Capability, Context, Registry
 from k8sholmes.capabilities.inputs import known_for
 from k8sholmes.cluster import Cluster
-from k8sholmes.environments import connect
+from k8sholmes.environments import connect, latest_inventory
 from k8sholmes.errors import InvestigationStateError, ModelFailure
 from k8sholmes.models import Model, Reply, tool_definition
+from k8sholmes.playbooks import PLAYBOOKS, plan_for
 from k8sholmes.records import (
     AcceptedException,
     Budgets,
@@ -37,6 +38,7 @@ from k8sholmes.records import (
     Step,
     ToolCall,
     User,
+    new_id,
     now,
 )
 from k8sholmes.store import Store
@@ -302,6 +304,38 @@ class Engine:
         )
         return inv
 
+    def _playbook(
+        self, inv: Investigation, model: Model, environment: Environment, cluster: Cluster, user: User
+    ) -> Investigation:
+        """The playbook the framing named, run once through the gate before the model gathers (0002)."""
+        framing = inv.framing
+        if framing is None or framing.playbook not in PLAYBOOKS or inv.playbook:
+            return inv
+        book = PLAYBOOKS[framing.playbook]
+        plan, limitations = plan_for(book, framing, latest_inventory(self.store, environment.id))
+        if book.needs and not any(book.needs in c.systems for c in self._capabilities(environment, user)[0]):
+            limitations.append(book.limitation)
+        structured = getattr(model, "tool_mode", "native") == "structured"
+        tool_calls = [ToolCall(id=new_id("pb"), name=cid, arguments=args) for cid, args in plan]
+        step = self._begin_step(inv, "gathering")
+        round_ = self._round(inv)
+        note = f"Playbook {book.id} ({book.title}): {len(plan)} checks, run by K8sHolmes, not the model."
+        self._append(
+            inv,
+            "assistant",
+            note,
+            author=f"playbook:{book.id}",
+            tool_calls=[] if structured else tool_calls,
+            round_=round_,
+        )
+        ctx = self._context(inv, environment, cluster, user)
+        summaries, _ = self._run_tool_calls(
+            inv, step, tool_calls, ctx, round_, structured=structured, playbook=book.id
+        )
+        self._end_step(inv, step, f"playbook {book.id}: " + "; ".join(summaries))
+        fresh = self.store.get(Investigation, inv.id)
+        return self._update(fresh, playbook=book.id, limitations=[*fresh.limitations, *limitations])
+
     def _gathering(
         self,
         inv: Investigation,
@@ -311,6 +345,7 @@ class Engine:
         user: User,
         started: float,
     ) -> Investigation:
+        inv = self._playbook(inv, model, environment, cluster, user)  # once, when the framing named one
         available, unavailable = self._capabilities(environment, user)
         framing = inv.framing or Framing(question=inv.question)
         available = actions.ordered(available, framing.intended_capabilities)  # 0002, part 4
@@ -406,15 +441,18 @@ class Engine:
         round_: int,
         *,
         structured: bool = False,
+        playbook: str | None = None,
     ) -> tuple[list[str], list[Call]]:
         """Run each requested capability through the gate; record the call, the evidence, the result
         message (a tool message, or in the structured mode a context message marked as data)."""
         summaries: list[str] = []
         calls: list[Call] = []
-        for tool_call in tool_calls[: inv.budgets.calls_per_step]:
+        limit = len(tool_calls) if playbook else inv.budgets.calls_per_step  # a plan is capped already
+        for tool_call in tool_calls[:limit]:
             call, evidence = self.registry.execute(
                 tool_call.name, tool_call.arguments, ctx, self.auth, step_id=step.id
             )
+            call = call.model_copy(update={"playbook": playbook})
             with self.store.transaction():
                 self.store.put(call)
                 if evidence is not None:
@@ -438,7 +476,7 @@ class Engine:
                 fresh = self.store.get(Investigation, inv.id)
                 self._update(fresh, limitations=[*fresh.limitations, f"refused: {call.reason}"])
             self._emit("call", {"investigation_id": inv.id, "call": call.model_dump(mode="json")})
-        for skipped in tool_calls[inv.budgets.calls_per_step :]:
+        for skipped in tool_calls[limit:]:
             self._append(
                 inv,
                 "tool",

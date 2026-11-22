@@ -28,6 +28,20 @@ values a `kind` or `namespace` accepts, and a name outside them is refused with 
 CRD the cluster serves is accepted by any name kubectl takes. Three invalid calls
 in a row stop gathering with a notice that says why, and the investigation concludes with what it has.
 
+## Playbooks
+
+For common questions K8sHolmes runs a fixed set of checks itself, and the model reasons over the results
+instead of choosing every call. The model names the playbook while it frames the question; each call
+still goes through the same checks of role, settings and permissions, is recorded with the playbook's
+name, and a refused one becomes a limitation. At most 40 calls run; the model can add its own after.
+
+| Playbook | For questions like | What it runs |
+|---|---|---|
+| `unused` | "Is anything unused?" | an inventory, the backends of every Service in scope, Deployments, StatefulSets and PersistentVolumeClaims; always states that traffic cannot be answered without a traffic source |
+| `restarts` | "Why does api keep restarting?" | the health of the named workloads, events and changes in each namespace for the period |
+| `exposure` | "What is exposed?" | network exposure and safeguards; states that nothing beyond the cluster can be answered |
+| `what_changed` | "What changed yesterday?" | changes and events in each namespace for the period |
+
 ## Coverage
 
 Every result states what it could know: `observed` (it saw the thing), `observed_absent` (it looked where

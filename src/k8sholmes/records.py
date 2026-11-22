@@ -199,6 +199,7 @@ class Framing(Record):
     period: Period = Field(default_factory=Period)
     hypotheses: list[str] = []
     intended_capabilities: list[str] = []
+    playbook: str | None = None  # the playbook the model chose (0002, part 6)
 
 
 class Notice(Record):
@@ -233,6 +234,7 @@ class Investigation(Record):
     answer: str | None = None  # the one-paragraph answer shown first (design §15.2)
     notices: list[Notice] = []  # what the user must see first, such as why gathering stopped (0002)
     tool_mode: str | None = None  # the tool mode of its model's latest call (0002, part 1)
+    playbook: str | None = None  # the playbook that ran, once it has (0002, part 6)
 
 
 class ToolCall(Record):
@@ -274,6 +276,7 @@ class Call(Record):
     capability_id: str
     inputs: dict[str, Any] = {}  # canonical: aliases resolved, kinds canonical (0002, part 5)
     received: dict[str, Any] | None = None  # what the model sent, when it differs from `inputs`
+    playbook: str | None = None  # the playbook that ran this call, not the model (0002, part 6)
     status: Literal["completed", "refused", "failed", "invalid"]
     reason: str = ""  # the refusal, the validation error or the failure
     duration_ms: int = 0

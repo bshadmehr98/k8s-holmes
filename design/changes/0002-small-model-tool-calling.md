@@ -2,7 +2,7 @@
 
 ## Status
 
-`accepted (approved by the maintainer 2026-11-22)`. Builds on design 0001 as of milestone 4 (merged
+`implemented in 0.1.0` (approved by the maintainer 2026-11-22; pieces A, B and C built the same day). Builds on design 0001 as of milestone 4 (merged
 2026-11-22, PR #1); section numbers and acceptance cases refer to that version of [design/current.md](../current.md).
 
 ## Context
