@@ -167,6 +167,18 @@ def test_environments_capabilities_knowledge_users_and_audit(tmp_path: Path) -> 
             "PATCH", f"/api/models/{added_model['id']}", {"is_default": True, "limits": {"max_tokens": 10}}
         )["endpoint"]
         assert made_default["is_default"] is True and made_default["limits"]["max_tokens"] == 10
+        assert made_default["tool_mode"] == "auto" and made_default["effective_tool_mode"] == "native"
+        tuned = admin.ok(
+            "PATCH",
+            f"/api/models/{added_model['id']}",
+            {"tool_mode": "structured", "temperature": 0.2, "limits": {"context_tokens": 8000}},
+        )["endpoint"]
+        assert (tuned["effective_tool_mode"], tuned["temperature"]) == ("structured", 0.2)
+        assert tuned["limits"]["context_tokens"] == 8000
+        status, _ = admin.call("PATCH", f"/api/models/{added_model['id']}", {"tool_mode": "telepathy"})
+        assert status == 400
+        cleared = admin.ok("PATCH", f"/api/models/{added_model['id']}", {"tool_mode": "", "temperature": ""})
+        assert (cleared["endpoint"]["tool_mode"], cleared["endpoint"]["temperature"]) == ("auto", None)
         assert (
             next(m for m in admin.ok("GET", "/api/models")["endpoints"] if m["id"] == "mdl_demo")[
                 "is_default"

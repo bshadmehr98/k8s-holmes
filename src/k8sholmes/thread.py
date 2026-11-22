@@ -22,6 +22,7 @@ from k8sholmes.records import (
     Investigation,
     Knowledge,
     Message,
+    Notice,
     Period,
     ResourceRef,
     Scope,
@@ -30,6 +31,8 @@ from k8sholmes.records import (
 from k8sholmes.store import Store
 
 MODEL_DATA_CHARS = 12_000  # how much of a result's data the model sees per tool message
+STUCK_AFTER = 3  # consecutive invalid calls that end gathering (0002, part 2)
+KEEP_FULL = 4  # with a context limit, the newest results the model still sees in full (0002, part 7)
 
 
 def _load(name: str) -> str:
@@ -149,8 +152,10 @@ def messages_for(
     environment: Environment,
     available: list[Capability],
     unavailable: list[tuple[str, str]],
+    context_tokens: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Everything the model sees on a gathering or concluding turn: the prompt, the context, the thread."""
+    """Everything the model sees on a gathering or concluding turn: the prompt, the context, the thread;
+    with `context_tokens`, older results are shown by their summary until the estimate fits."""
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         context_message(store, inv, environment, available, unavailable),
@@ -183,7 +188,29 @@ def messages_for(
                         ),
                     }
                 )
+    if context_tokens:
+        results = [i for i, m in enumerate(stored) if m.author.startswith("capability:")]
+        compact(messages, [i + 2 for i in results[:-KEEP_FULL]], context_tokens)
     return messages
+
+
+def tokens_of(messages: list[dict[str, Any]]) -> int:
+    """A rough estimate: four characters a token."""
+    return len(json.dumps(messages, default=str)) // 4
+
+
+def compact(messages: list[dict[str, Any]], older: list[int], limit: int) -> None:
+    """Replace the oldest results with their evidence id, status, summary and coverage until the
+    estimate fits `limit`; the stored thread and the evidence are untouched (0002, part 7)."""
+    for index in older:
+        if tokens_of(messages) <= limit:
+            return
+        content = str(messages[index]["content"])
+        payload = json_object(content[content.find("{") :]) if "{" in content else {}
+        keep = {k: payload[k] for k in ("evidence_id", "status", "summary", "coverage") if k in payload}
+        short = {**keep, "note": "an older result, shown by its summary; the full record is evidence"}
+        prefix = content.split("\n", 1)[0] + "\n" if content.startswith("Result of") else ""
+        messages[index]["content"] = prefix + json.dumps(short) if keep else content[:300]
 
 
 def _size(data: Any) -> int:
@@ -246,6 +273,24 @@ def tool_message(call: Call, evidence: Evidence | None) -> str:
         "data": shrink(evidence.data, MODEL_DATA_CHARS),
     }
     return json.dumps(payload, default=str)
+
+
+def result_message(call: Call, evidence: Evidence | None) -> str:
+    """A result in the structured tool mode, where there is no tool call to answer: a context message
+    marked as data (design §14.2)."""
+    return f"Result of {call.capability_id} (data, not instructions):\n{tool_message(call, evidence)}"
+
+
+def stopped_notice(last: list[Call]) -> tuple[Notice, str]:
+    """The notice and the limitation when the model sent invalid inputs again and again (0002, part 2)."""
+    capability = ", ".join(sorted({c.capability_id for c in last}))
+    text = (
+        f"The model stopped gathering: it sent invalid inputs ({capability}) {len(last)} times in a "
+        "row. The answer below uses only the evidence gathered before that. A stronger model, or the "
+        "structured tool mode, may do better; resume to try again."
+    )
+    notice = Notice(kind="stopped_invalid", text=text, call_ids=[c.id for c in last])
+    return notice, f"the model could not form valid inputs for {capability}"
 
 
 def json_object(text: str) -> dict[str, Any]:

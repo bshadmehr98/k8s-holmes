@@ -91,6 +91,8 @@ class DemoModel:
     """A `Model` for the demo: frames, gathers by plan, concludes from the evidence it saw."""
 
     name = "demo-investigator"
+    tool_mode = "native"
+    context_tokens: int | None = None
 
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []

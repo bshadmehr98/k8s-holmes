@@ -102,7 +102,7 @@ function inputFor(field, id) {
     case "checkbox":
       return el("input", { id, name: field.name, type: "checkbox", checked: field.value });
     default:
-      return el("input", { id, name: field.name, type: field.type || "text", placeholder: field.placeholder || "", required: field.required, value: field.value ?? "" });
+      return el("input", { id, name: field.name, type: field.type || "text", placeholder: field.placeholder || "", required: field.required, value: field.value ?? "", step: field.step });
   }
 }
 

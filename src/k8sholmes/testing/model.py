@@ -44,9 +44,17 @@ class ScriptedModel:
     """
 
     def __init__(
-        self, replies: list[Reply] | None = None, *, script: Script | None = None, name: str = "scripted"
+        self,
+        replies: list[Reply] | None = None,
+        *,
+        script: Script | None = None,
+        name: str = "scripted",
+        tool_mode: str = "native",
+        context_tokens: int | None = None,
     ) -> None:
         self.name = name
+        self.tool_mode = tool_mode
+        self.context_tokens = context_tokens
         self._replies = list(replies or [])
         self._script = script
         self.requests: list[dict[str, Any]] = []
@@ -96,3 +104,4 @@ def check_model(model: Any) -> None:
     assert min(reply.prompt_tokens, reply.completion_tokens, reply.duration_ms) >= 0, "usage is counted"
     assert isinstance(model.name, str), "a model has a name"
     assert model.name, "a model has a name"
+    assert getattr(model, "tool_mode", "native") in ("native", "structured"), "a known tool mode"

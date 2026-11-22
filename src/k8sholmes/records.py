@@ -389,6 +389,7 @@ class ModelLimits(Record):
     timeout_ms: int = 120_000
     tokens_per_investigation: int = 400_000
     tokens_per_day: int = 4_000_000
+    context_tokens: int | None = None  # what the model is shown is compacted to fit (0002, part 7)
 
 
 class ModelPrice(Record):
@@ -415,6 +416,8 @@ class ModelEndpoint(Record):
     limits: ModelLimits = Field(default_factory=ModelLimits)
     price: ModelPrice | None = None
     tests: dict[str, CapabilityTestResult] = {}
+    tool_mode: Literal["auto", "native", "structured"] = "auto"  # how gathering asks for calls (0002)
+    temperature: float | None = None  # sent with every call when set (0002, part 7)
     is_default: bool = False
     created_at: datetime = Field(default_factory=now)
 
@@ -431,6 +434,7 @@ class ModelCall(Record):
     duration_ms: int = 0
     status: Literal["ok", "retried", "failed"] = "ok"
     error: str | None = None
+    mode: str | None = None  # gathering: "native", or the structured step "choose" or "fill" (0002)
 
 
 # Reports (design §10)
